@@ -117,3 +117,5 @@ dongun-blog/
 
 Vercel 프로젝트 → Settings → Domains → 구매한 도메인 입력 → 안내에 따라 DNS 설정.
 연결 후 `SITE_URL` 환경변수도 새 도메인으로 업데이트하고 Redeploy 필요.
+
+클로드 코드 연동 테스트 완료
