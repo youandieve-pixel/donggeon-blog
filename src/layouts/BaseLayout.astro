@@ -21,25 +21,23 @@ const dateStr = today.toLocaleDateString('ko-KR', {
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Pretendard:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #0b1220;
-      --bg-raised: #121b2e;
-      --bg-raised-2: #17223a;
-      --ink: #e9e6da;
-      --ink-soft: #8b92a5;
-      --gold: #c9a227;
-      --gold-dim: #8a712a;
-      --up: #4c9a6a;
-      --down: #b24b3e;
-      --rule: #232b3d;
+      --bg: #ffffff;
+      --bg-raised: #faf8f3;
+      --ink: #17181c;
+      --ink-soft: #6b6f76;
+      --gold: #a9790a;
+      --gold-bright: #c9971f;
+      --up: #2f7a4f;
+      --down: #a13c2e;
+      --rule: #e7e4da;
+      --dark-strip: #12131a;
     }
 
     * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      background:
-        repeating-linear-gradient(180deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px),
-        var(--bg);
+      background: var(--bg);
       color: var(--ink);
       font-family: 'Pretendard', -apple-system, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -55,8 +53,7 @@ const dateStr = today.toLocaleDateString('ko-KR', {
 
     /* 마스트헤드 */
     .top-strip {
-      background: #05080f;
-      border-bottom: 1px solid var(--rule);
+      background: var(--dark-strip);
       padding: 0.5rem 0;
     }
     .top-strip .wrap {
@@ -67,24 +64,24 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       font-family: 'IBM Plex Mono', monospace;
       font-size: 0.7rem;
       letter-spacing: 0.1em;
-      color: var(--ink-soft);
+      color: #9aa0ad;
     }
     .live {
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
-      color: var(--gold);
+      color: var(--gold-bright);
     }
     .live .dot {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: var(--gold);
+      background: var(--gold-bright);
       animation: pulse 1.8s ease-in-out infinite;
     }
     @keyframes pulse {
-      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(201,162,39,0.5); }
-      50% { opacity: 0.4; box-shadow: 0 0 0 4px rgba(201,162,39,0); }
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(201,151,31,0.5); }
+      50% { opacity: 0.4; box-shadow: 0 0 0 4px rgba(201,151,31,0); }
     }
     @media (prefers-reduced-motion: reduce) {
       .live .dot { animation: none; }
@@ -100,7 +97,7 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       font-size: clamp(2.2rem, 6vw, 3.1rem);
       margin: 0;
       letter-spacing: -0.01em;
-      background: linear-gradient(180deg, #f3ead0, var(--gold));
+      background: linear-gradient(180deg, var(--ink), var(--gold));
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
@@ -136,10 +133,8 @@ const dateStr = today.toLocaleDateString('ko-KR', {
 
     /* 티커 */
     .ticker-bar {
-      background: #05080f;
-      border-top: 1px solid var(--rule);
-      border-bottom: 1px solid var(--rule);
-      color: var(--gold);
+      background: var(--dark-strip);
+      color: var(--gold-bright);
       overflow: hidden;
       white-space: nowrap;
       font-family: 'IBM Plex Mono', monospace;
@@ -151,8 +146,8 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       padding: 0.6rem 0;
       animation: scroll-left 32s linear infinite;
     }
-    .ticker-track span { margin-right: 2.5rem; color: var(--ink-soft); }
-    .ticker-track span::before { content: '● '; color: var(--gold); font-size: 0.6rem; }
+    .ticker-track span { margin-right: 2.5rem; color: #9aa0ad; }
+    .ticker-track span::before { content: '● '; color: var(--gold-bright); font-size: 0.6rem; }
     @keyframes scroll-left {
       0% { transform: translateX(0); }
       100% { transform: translateX(-50%); }
