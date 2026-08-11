@@ -86,13 +86,17 @@ ${polishedBody}
   }
 }
 
-// Claude API로 제목/태그/요약 생성 + 본문 다듬기
+// Claude API로 제목/태그/요약 생성 + 본문 다듬기 (필요 시 웹서치 활용)
 async function polishWithClaude(rawContent) {
-  const systemPrompt = `너는 개인 블로그 편집자야. 사용자가 텔레그램으로 보낸 거친 메모를 받아서
-자연스러운 한국어 블로그 글로 다듬어. 과장하거나 내용을 새로 지어내지 말고,
-원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
+  const systemPrompt = `너는 개인 블로그 편집자야. 사용자가 텔레그램으로 보낸 메모나 요청을 받아서
+자연스러운 한국어 블로그 글로 작성해.
 
-반드시 아래 JSON 형식으로만 응답해. 다른 설명, 코드블록 표시(\`\`\`) 없이 순수 JSON만 출력해:
+- 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
+- 사용자가 최신 정보나 사실관계가 필요한 주제(시황, 뉴스, 순위, 가격, 일정 등)를 요청했다면: web_search 도구를 사용해서 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해. 검색 없이 추측하거나 오래된 지식으로 단정하지 마.
+- 출처가 된 매체명 정도는 본문에 자연스럽게 언급해도 좋지만, 특정 문장을 그대로 길게 베끼지 말고 항상 네 표현으로 다시 써.
+
+검색이 필요한 경우 먼저 web_search로 조사한 다음, 마지막 응답으로 반드시 아래 JSON 형식만 출력해.
+그 외의 경우에도 최종 응답은 항상 이 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마:
 {
   "title": "글 제목 (짧고 자연스럽게)",
   "description": "1문장 요약",
@@ -109,19 +113,36 @@ async function polishWithClaude(rawContent) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      max_tokens: 3000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: rawContent }]
+      messages: [{ role: 'user', content: rawContent }],
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: 5
+        }
+      ]
     })
   });
 
   if (!response.ok) {
-    throw new Error(`Claude API 오류: ${response.status}`);
+    const errText = await response.text();
+    throw new Error(`Claude API 오류: ${response.status} ${errText}`);
   }
 
   const data = await response.json();
-  const textBlock = data.content.find((c) => c.type === 'text');
-  const cleaned = textBlock.text.replace(/```json|```/g, '').trim();
+
+  // 웹서치를 거치면 content 배열에 검색 도구 블록들이 섞여 있고,
+  // 우리가 원하는 최종 JSON은 마지막 text 블록에 들어있음
+  const textBlocks = data.content.filter((c) => c.type === 'text');
+  const lastText = textBlocks[textBlocks.length - 1];
+
+  if (!lastText) {
+    throw new Error('Claude 응답에서 텍스트를 찾을 수 없음');
+  }
+
+  const cleaned = lastText.text.replace(/```json|```/g, '').trim();
 
   let parsed;
   try {
@@ -132,7 +153,7 @@ async function polishWithClaude(rawContent) {
       title: rawContent.slice(0, 20),
       description: '',
       tags: [],
-      body: rawContent
+      body: cleaned || rawContent
     };
   }
 
