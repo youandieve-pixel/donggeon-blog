@@ -1,0 +1,45 @@
+---
+const { title } = Astro.props;
+---
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title} | 동건의 블로그</title>
+  <style>
+    body {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      line-height: 1.7;
+      color: #222;
+    }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header { margin-bottom: 2.5rem; }
+    header h1 { font-size: 1.4rem; margin: 0; }
+    .post-list { list-style: none; padding: 0; }
+    .post-list li { margin-bottom: 1.2rem; }
+    .post-list time { display: block; font-size: 0.85rem; color: #888; }
+    .tags span {
+      display: inline-block;
+      background: #eef2ff;
+      color: #4338ca;
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      margin-right: 0.3rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="/">동건의 블로그</a></h1>
+  </header>
+  <main>
+    <slot />
+  </main>
+</body>
+</html>
