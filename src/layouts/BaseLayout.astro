@@ -18,23 +18,28 @@ const dateStr = today.toLocaleDateString('ko-KR', {
   <title>{title} | 동건 리포트</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Pretendard:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Pretendard:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --paper: #eeece5;
-      --paper-raised: #f7f5f0;
-      --ink: #1c1c1a;
-      --ink-soft: #59564f;
-      --navy: #1c2b45;
-      --signal: #b23a2e;
-      --rule: #c9c4b6;
+      --bg: #0b1220;
+      --bg-raised: #121b2e;
+      --bg-raised-2: #17223a;
+      --ink: #e9e6da;
+      --ink-soft: #8b92a5;
+      --gold: #c9a227;
+      --gold-dim: #8a712a;
+      --up: #4c9a6a;
+      --down: #b24b3e;
+      --rule: #232b3d;
     }
 
     * { box-sizing: border-box; }
 
     body {
       margin: 0;
-      background: var(--paper);
+      background:
+        repeating-linear-gradient(180deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px),
+        var(--bg);
       color: var(--ink);
       font-family: 'Pretendard', -apple-system, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -43,89 +48,111 @@ const dateStr = today.toLocaleDateString('ko-KR', {
     a { color: inherit; text-decoration: none; }
 
     .wrap {
-      max-width: 960px;
+      max-width: 980px;
       margin: 0 auto;
-      padding: 0 1.25rem 4rem;
+      padding: 0 1.25rem 5rem;
     }
 
     /* 마스트헤드 */
-    .masthead {
-      padding: 2.25rem 0 1rem;
-      text-align: center;
+    .top-strip {
+      background: #05080f;
+      border-bottom: 1px solid var(--rule);
+      padding: 0.5rem 0;
     }
-    .masthead .eyebrow {
+    .top-strip .wrap {
+      padding-bottom: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.72rem;
-      letter-spacing: 0.18em;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
       color: var(--ink-soft);
-      text-transform: uppercase;
+    }
+    .live {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--gold);
+    }
+    .live .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--gold);
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(201,162,39,0.5); }
+      50% { opacity: 0.4; box-shadow: 0 0 0 4px rgba(201,162,39,0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .live .dot { animation: none; }
+    }
+
+    .masthead {
+      padding: 2.5rem 0 1.25rem;
+      text-align: center;
     }
     .masthead h1 {
       font-family: 'Noto Serif KR', serif;
       font-weight: 900;
-      font-size: clamp(2.1rem, 6vw, 3rem);
-      margin: 0.35rem 0 0.5rem;
+      font-size: clamp(2.2rem, 6vw, 3.1rem);
+      margin: 0;
       letter-spacing: -0.01em;
+      background: linear-gradient(180deg, #f3ead0, var(--gold));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
     }
-    .masthead h1 a:hover { opacity: 0.75; }
+    .masthead h1:hover { opacity: 0.85; }
     .masthead .dateline {
+      margin-top: 0.5rem;
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.78rem;
+      font-size: 0.75rem;
       color: var(--ink-soft);
     }
 
-    /* 카테고리 내비게이션 */
     nav.catnav {
       display: flex;
       justify-content: center;
-      gap: 1.75rem;
-      padding: 0.9rem 0;
+      gap: 2rem;
+      padding: 1.1rem 0;
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.82rem;
-      letter-spacing: 0.03em;
+      font-size: 0.8rem;
+      letter-spacing: 0.04em;
+      color: var(--ink-soft);
     }
     nav.catnav a {
-      padding-bottom: 0.2rem;
+      padding-bottom: 0.25rem;
       border-bottom: 2px solid transparent;
     }
     nav.catnav a:hover {
-      border-bottom-color: var(--signal);
-      color: var(--signal);
+      border-bottom-color: var(--gold);
+      color: var(--gold);
     }
 
-    .rule-thick {
-      border: none;
-      border-top: 3px solid var(--ink);
-      margin: 0;
-    }
-    .rule-thin {
-      border: none;
-      border-top: 1px solid var(--rule);
-      margin: 0;
-    }
+    .rule-thick { border: none; border-top: 1px solid var(--rule); margin: 0; }
 
     /* 티커 */
     .ticker-bar {
-      background: var(--navy);
-      color: #ece7da;
+      background: #05080f;
+      border-top: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+      color: var(--gold);
       overflow: hidden;
       white-space: nowrap;
       font-family: 'IBM Plex Mono', monospace;
       font-size: 0.78rem;
-      letter-spacing: 0.02em;
+      letter-spacing: 0.03em;
     }
     .ticker-track {
       display: inline-block;
-      padding: 0.55rem 0;
+      padding: 0.6rem 0;
       animation: scroll-left 32s linear infinite;
     }
-    .ticker-track span {
-      margin-right: 2.5rem;
-    }
-    .ticker-track span::before {
-      content: '▸ ';
-      color: var(--signal);
-    }
+    .ticker-track span { margin-right: 2.5rem; color: var(--ink-soft); }
+    .ticker-track span::before { content: '● '; color: var(--gold); font-size: 0.6rem; }
     @keyframes scroll-left {
       0% { transform: translateX(0); }
       100% { transform: translateX(-50%); }
@@ -134,23 +161,29 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       .ticker-track { animation: none; }
     }
 
-    main { padding-top: 2rem; }
+    main { padding-top: 2.5rem; }
 
     footer {
       margin-top: 4rem;
       padding-top: 1.25rem;
       border-top: 1px solid var(--rule);
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.72rem;
+      font-size: 0.7rem;
       color: var(--ink-soft);
       text-align: center;
     }
   </style>
 </head>
 <body>
+  <div class="top-strip">
+    <div class="wrap">
+      <span class="live"><span class="dot"></span>LIVE DISPATCH</span>
+      <span>DONGGEON REPORT TERMINAL</span>
+    </div>
+  </div>
+
   <div class="wrap">
     <header class="masthead">
-      <div class="eyebrow">PERSONAL DISPATCH · SINCE 2026</div>
       <h1><a href="/">동건 리포트</a></h1>
       <div class="dateline">{dateStr}</div>
     </header>
@@ -158,8 +191,8 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       <a href="/">전체</a>
       {CATEGORIES.map((c) => <a href={`/category/${c.id}/`}>{c.label}</a>)}
     </nav>
-    <hr class="rule-thick" />
   </div>
+  <hr class="rule-thick" />
 
   <div class="ticker-bar">
     <div class="ticker-track">
