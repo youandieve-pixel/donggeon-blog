@@ -1,15 +1,20 @@
 // Vercel Serverless Function
-// 텔레그램 /post 명령어 수신 -> Claude API로 다듬기 -> GitHub에 마크다운 커밋 -> 자동 배포
+// 텔레그램 /post 명령어 수신 -> Claude API로 다듬기(+웹서치) -> 이미지 처리 -> GitHub 커밋 -> 자동 배포
 //
 // 필요한 환경변수 (Vercel 프로젝트 Settings > Environment Variables 에 등록):
-//   TELEGRAM_BOT_TOKEN   : BotFather에서 발급받은 토큰
-//   TELEGRAM_CHAT_ID     : 본인 chat_id (허용된 사람만 포스팅 가능하게 하는 화이트리스트)
-//   TELEGRAM_WEBHOOK_SECRET : 텔레그램 웹훅 검증용 임의의 문자열 (직접 정하면 됨)
-//   ANTHROPIC_API_KEY    : 본인 Claude API 키 (console.anthropic.com 에서 발급)
-//   GITHUB_TOKEN         : GitHub Personal Access Token (repo 쓰기 권한)
-//   GITHUB_REPO          : "아이디/저장소명" 형식 (예: dongkeon/dongun-blog)
-//   GITHUB_BRANCH        : 기본 브랜치명 (보통 "main")
-//   SITE_URL             : 배포된 사이트 주소 (예: https://dongun-blog.vercel.app)
+//   TELEGRAM_BOT_TOKEN      : BotFather에서 발급받은 토큰
+//   TELEGRAM_CHAT_ID        : 본인 chat_id (허용된 사람만 포스팅 가능하게 하는 화이트리스트)
+//   TELEGRAM_WEBHOOK_SECRET : 텔레그램 웹훅 검증용 임의의 문자열
+//   ANTHROPIC_API_KEY       : 본인 Claude API 키
+//   GITHUB_TOKEN            : GitHub Personal Access Token (repo 쓰기 권한)
+//   GITHUB_REPO             : "아이디/저장소명" 형식
+//   GITHUB_BRANCH           : 기본 브랜치명 (보통 "main")
+//   SITE_URL                : 배포된 사이트 주소
+//
+// 사용법:
+//   /post 텍스트만                       -> 이미지 없이 포스팅
+//   /post 텍스트 (사진 첨부해서 캡션으로) -> 첨부한 사진이 글 대표 이미지로 삽입
+//   /post 텍스트 AI이미지                -> 내용 기반으로 AI가 대표 이미지 자동 생성해서 삽입
 
 export const config = { runtime: 'nodejs' };
 
@@ -18,7 +23,6 @@ export default async function handler(req, res) {
     return res.status(200).send('OK');
   }
 
-  // 텔레그램 웹훅 보안 토큰 검증
   const secretHeader = req.headers['x-telegram-bot-api-secret-token'];
   if (secretHeader !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     return res.status(401).send('Unauthorized');
@@ -27,39 +31,68 @@ export default async function handler(req, res) {
   const body = req.body;
   const message = body?.message;
 
-  if (!message || !message.text) {
+  if (!message) {
+    return res.status(200).send('ignored');
+  }
+
+  // 사진과 함께 온 메시지는 text가 아니라 caption 필드에 글자가 들어있음
+  const rawText = (message.text || message.caption || '').trim();
+  const photos = message.photo; // 여러 해상도 배열, 마지막이 제일 고화질
+
+  if (!rawText) {
     return res.status(200).send('ignored');
   }
 
   const chatId = String(message.chat.id);
-  const text = message.text.trim();
 
-  // 허용된 사용자(본인)만 포스팅 가능
   if (chatId !== process.env.TELEGRAM_CHAT_ID) {
     await sendTelegram(chatId, '권한이 없습니다.');
     return res.status(200).send('unauthorized user');
   }
 
-  // /post 명령어가 아니면 무시
-  if (!text.startsWith('/post')) {
+  if (!rawText.startsWith('/post')) {
     return res.status(200).send('ignored');
   }
 
-  const rawContent = text.replace(/^\/post\s*/, '').trim();
+  let rawContent = rawText.replace(/^\/post\s*/, '').trim();
 
-  if (!rawContent) {
+  if (!rawContent && !photos) {
     await sendTelegram(chatId, '/post 뒤에 내용을 입력해줘. 예: /post 오늘 있었던 일...');
     return res.status(200).send('empty content');
   }
 
+  // "AI이미지" 키워드 감지 (있으면 제거하고 플래그로 기억)
+  const wantsAiImage = /AI\s*이미지/i.test(rawContent);
+  rawContent = rawContent.replace(/AI\s*이미지/gi, '').trim();
+
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
-    const { title, tags, body: polishedBody, description } = await polishWithClaude(rawContent);
+    const { title, tags, body: polishedBody, description, imagePrompt } =
+      await polishWithClaude(rawContent || '(사진 첨부)');
 
     const slug = makeSlug(title);
     const dateStr = new Date().toISOString().slice(0, 10);
     const filename = `${dateStr}-${slug}.md`;
+
+    // 이미지 처리: 1) 사용자가 사진 첨부 2) AI이미지 요청 3) 없음
+    let imagePath = null;
+
+    if (photos && photos.length > 0) {
+      await sendTelegram(chatId, '첨부한 사진 업로드 중...');
+      const largest = photos[photos.length - 1];
+      const imageBuffer = await downloadTelegramFile(largest.file_id);
+      imagePath = await commitImageToGithub(imageBuffer, dateStr, slug, 'jpg');
+    } else if (wantsAiImage) {
+      await sendTelegram(chatId, 'AI 이미지 생성 중...');
+      const promptForImage = imagePrompt || title;
+      const imageBuffer = await generateAiImage(promptForImage);
+      if (imageBuffer) {
+        imagePath = await commitImageToGithub(imageBuffer, dateStr, slug, 'jpg');
+      }
+    }
+
+    const imageMarkdown = imagePath ? `![${title}](${imagePath})\n\n` : '';
 
     const frontmatter = `---
 title: "${escapeYaml(title)}"
@@ -68,10 +101,10 @@ pubDate: ${dateStr}
 tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]
 ---
 
-${polishedBody}
+${imageMarkdown}${polishedBody}
 `;
 
-    await commitToGithub(filename, frontmatter);
+    await commitTextToGithub(`src/content/blog/${filename}`, frontmatter, `post: ${filename}`);
 
     const siteUrl = process.env.SITE_URL || '';
     const link = `${siteUrl}/blog/${dateStr}-${slug}/`;
@@ -92,8 +125,9 @@ async function polishWithClaude(rawContent) {
 자연스러운 한국어 블로그 글로 작성해.
 
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
-- 사용자가 최신 정보나 사실관계가 필요한 주제(시황, 뉴스, 순위, 가격, 일정 등)를 요청했다면: web_search 도구를 사용해서 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해. 검색 없이 추측하거나 오래된 지식으로 단정하지 마.
-- 출처가 된 매체명 정도는 본문에 자연스럽게 언급해도 좋지만, 특정 문장을 그대로 길게 베끼지 말고 항상 네 표현으로 다시 써.
+- 사용자가 최신 정보나 사실관계가 필요한 주제(시황, 뉴스, 순위, 가격, 일정 등)를 요청했다면: web_search 도구를 사용해서 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해.
+- 특정 문장을 그대로 길게 베끼지 말고 항상 네 표현으로 다시 써.
+- "imagePrompt" 필드에는 이 글의 대표 이미지를 생성할 때 쓸 짧은 영어 이미지 프롬프트를 만들어줘 (실제 인물/브랜드명 없이, 분위기와 장면 위주로).
 
 검색이 필요한 경우 먼저 web_search로 조사한 다음, 마지막 응답으로 반드시 아래 JSON 형식만 출력해.
 그 외의 경우에도 최종 응답은 항상 이 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마:
@@ -101,7 +135,8 @@ async function polishWithClaude(rawContent) {
   "title": "글 제목 (짧고 자연스럽게)",
   "description": "1문장 요약",
   "tags": ["태그1", "태그2"],
-  "body": "마크다운 형식의 다듬어진 본문"
+  "body": "마크다운 형식의 다듬어진 본문",
+  "imagePrompt": "짧은 영어 이미지 생성 프롬프트"
 }`;
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -132,9 +167,6 @@ async function polishWithClaude(rawContent) {
   }
 
   const data = await response.json();
-
-  // 웹서치를 거치면 content 배열에 검색 도구 블록들이 섞여 있고,
-  // 우리가 원하는 최종 JSON은 마지막 text 블록에 들어있음
   const textBlocks = data.content.filter((c) => c.type === 'text');
   const lastText = textBlocks[textBlocks.length - 1];
 
@@ -148,26 +180,87 @@ async function polishWithClaude(rawContent) {
   try {
     parsed = JSON.parse(cleaned);
   } catch (e) {
-    // 파싱 실패 시 최소한의 fallback
     parsed = {
       title: rawContent.slice(0, 20),
       description: '',
       tags: [],
-      body: cleaned || rawContent
+      body: cleaned || rawContent,
+      imagePrompt: ''
     };
   }
 
   return parsed;
 }
 
-// GitHub Contents API로 마크다운 파일 커밋
-async function commitToGithub(filename, content) {
+// 텔레그램 파일(사진) 다운로드
+async function downloadTelegramFile(fileId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+
+  const fileInfoRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
+  const fileInfo = await fileInfoRes.json();
+
+  if (!fileInfo.ok) {
+    throw new Error('텔레그램 파일 정보 조회 실패');
+  }
+
+  const filePath = fileInfo.result.file_path;
+  const fileUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+
+  const fileRes = await fetch(fileUrl);
+  if (!fileRes.ok) {
+    throw new Error('텔레그램 파일 다운로드 실패');
+  }
+
+  const arrayBuffer = await fileRes.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+// 무료 이미지 생성 서비스(Pollinations)로 AI 이미지 생성
+async function generateAiImage(prompt) {
+  try {
+    const encodedPrompt = encodeURIComponent(prompt);
+    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (e) {
+    console.error('AI 이미지 생성 실패:', e);
+    return null;
+  }
+}
+
+// 이미지를 GitHub public/images 폴더에 커밋하고, 사이트에서 접근 가능한 경로를 반환
+async function commitImageToGithub(imageBuffer, dateStr, slug, ext) {
+  const filename = `${dateStr}-${slug}.${ext}`;
+  const repoPath = `public/images/${filename}`;
+
+  await commitBinaryToGithub(repoPath, imageBuffer, `image: ${filename}`);
+
+  // Astro에서 public/ 폴더는 사이트 루트로 그대로 서빙됨
+  return `/images/${filename}`;
+}
+
+// GitHub Contents API로 텍스트 파일 커밋
+async function commitTextToGithub(path, content, commitMessage) {
+  const contentBase64 = Buffer.from(content, 'utf-8').toString('base64');
+  await putToGithub(path, contentBase64, commitMessage);
+}
+
+// GitHub Contents API로 바이너리(이미지) 파일 커밋
+async function commitBinaryToGithub(path, buffer, commitMessage) {
+  const contentBase64 = buffer.toString('base64');
+  await putToGithub(path, contentBase64, commitMessage);
+}
+
+async function putToGithub(path, contentBase64, commitMessage) {
   const repo = process.env.GITHUB_REPO;
   const branch = process.env.GITHUB_BRANCH || 'main';
-  const path = `src/content/blog/${filename}`;
   const url = `https://api.github.com/repos/${repo}/contents/${path}`;
-
-  const contentBase64 = Buffer.from(content, 'utf-8').toString('base64');
 
   const response = await fetch(url, {
     method: 'PUT',
@@ -177,7 +270,7 @@ async function commitToGithub(filename, content) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      message: `post: ${filename}`,
+      message: commitMessage,
       content: contentBase64,
       branch
     })
@@ -199,7 +292,6 @@ async function sendTelegram(chatId, text) {
 }
 
 function makeSlug(title) {
-  // 한글 제목도 슬러그로 쓸 수 있게 간단 처리 (공백 -> 하이픈, 특수문자 제거)
   return title
     .trim()
     .toLowerCase()
