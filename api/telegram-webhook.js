@@ -92,16 +92,16 @@ export default async function handler(req, res) {
       }
     }
 
-    const imageMarkdown = imagePath ? `![${title}](${imagePath})\n\n` : '';
+    const imageFrontmatter = imagePath ? `\nimage: "${imagePath}"` : '';
 
     const frontmatter = `---
 title: "${escapeYaml(title)}"
 description: "${escapeYaml(description)}"
 pubDate: ${dateStr}
-tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]
+tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]${imageFrontmatter}
 ---
 
-${imageMarkdown}${polishedBody}
+${polishedBody}
 `;
 
     await commitTextToGithub(`src/content/blog/${filename}`, frontmatter, `post: ${filename}`);

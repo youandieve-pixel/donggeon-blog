@@ -12,15 +12,85 @@ export async function getStaticPaths() {
 
 const { post } = Astro.props;
 const { Content } = await post.render();
+
+function fmtDate(d) {
+  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
+}
 ---
-<BaseLayout title={post.data.title}>
-  <article>
-    <h1>{post.data.title}</h1>
-    <time>{post.data.pubDate.toLocaleDateString('ko-KR')}</time>
-    <div class="tags">
-      {post.data.tags.map((tag) => <span>{tag}</span>)}
+<BaseLayout title={post.data.title} tags={post.data.tags}>
+  <style>
+    .article-head {
+      margin-bottom: 1.5rem;
+    }
+    .tag-row {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.9rem;
+    }
+    .tag-row span {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      color: #fff;
+      background: var(--navy);
+      padding: 0.2rem 0.5rem;
+    }
+    .article-head h1 {
+      font-family: 'Noto Serif KR', serif;
+      font-size: clamp(1.8rem, 4.5vw, 2.5rem);
+      line-height: 1.35;
+      margin: 0 0 0.6rem;
+    }
+    .article-head .byline {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--ink-soft);
+    }
+    .cover {
+      margin: 1.5rem 0;
+      border: 1px solid var(--rule);
+    }
+    .cover img { width: 100%; display: block; }
+
+    article :global(p) {
+      line-height: 1.85;
+      font-size: 1.02rem;
+      margin: 0 0 1.2rem;
+    }
+    article :global(h2), article :global(h3) {
+      font-family: 'Noto Serif KR', serif;
+    }
+    article :global(img) {
+      max-width: 100%;
+      border: 1px solid var(--rule);
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 3rem;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem;
+      border-top: 1px solid var(--rule);
+      padding-top: 1rem;
+    }
+    .back-link:hover { color: var(--signal); }
+  </style>
+
+  <div class="article-head">
+    <div class="tag-row">
+      {post.data.tags.map((t) => <span>{t}</span>)}
     </div>
-    <hr />
+    <h1>{post.data.title}</h1>
+    <div class="byline">{fmtDate(post.data.pubDate)} · 동건 리포트</div>
+  </div>
+
+  {post.data.image && (
+    <div class="cover"><img src={post.data.image} alt={post.data.title} /></div>
+  )}
+
+  <article>
     <Content />
   </article>
+
+  <a class="back-link" href="/">← 전체 기사 목록</a>
 </BaseLayout>

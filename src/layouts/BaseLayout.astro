@@ -1,45 +1,154 @@
 ---
-const { title } = Astro.props;
+const { title, tags = [] } = Astro.props;
+const today = new Date();
+const dateStr = today.toLocaleDateString('ko-KR', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+  weekday: 'long'
+});
 ---
 <!doctype html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{title} | 동건의 블로그</title>
+  <title>{title} | 동건 리포트</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Pretendard:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
-    body {
-      max-width: 720px;
-      margin: 0 auto;
-      padding: 2rem 1.25rem;
-      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-      line-height: 1.7;
-      color: #222;
+    :root {
+      --paper: #eeece5;
+      --paper-raised: #f7f5f0;
+      --ink: #1c1c1a;
+      --ink-soft: #59564f;
+      --navy: #1c2b45;
+      --signal: #b23a2e;
+      --rule: #c9c4b6;
     }
-    a { color: #2563eb; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    header { margin-bottom: 2.5rem; }
-    header h1 { font-size: 1.4rem; margin: 0; }
-    .post-list { list-style: none; padding: 0; }
-    .post-list li { margin-bottom: 1.2rem; }
-    .post-list time { display: block; font-size: 0.85rem; color: #888; }
-    .tags span {
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'Pretendard', -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 1.25rem 4rem;
+    }
+
+    /* 마스트헤드 */
+    .masthead {
+      padding: 2.25rem 0 1rem;
+      text-align: center;
+    }
+    .masthead .eyebrow {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+    }
+    .masthead h1 {
+      font-family: 'Noto Serif KR', serif;
+      font-weight: 900;
+      font-size: clamp(2.1rem, 6vw, 3rem);
+      margin: 0.35rem 0 0.5rem;
+      letter-spacing: -0.01em;
+    }
+    .masthead h1 a:hover { opacity: 0.75; }
+    .masthead .dateline {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--ink-soft);
+    }
+
+    .rule-thick {
+      border: none;
+      border-top: 3px solid var(--ink);
+      margin: 1rem 0 0;
+    }
+    .rule-thin {
+      border: none;
+      border-top: 1px solid var(--rule);
+      margin: 0;
+    }
+
+    /* 티커 */
+    .ticker-bar {
+      background: var(--navy);
+      color: #ece7da;
+      overflow: hidden;
+      white-space: nowrap;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+    }
+    .ticker-track {
       display: inline-block;
-      background: #eef2ff;
-      color: #4338ca;
-      font-size: 0.75rem;
-      padding: 0.15rem 0.5rem;
-      border-radius: 999px;
-      margin-right: 0.3rem;
+      padding: 0.55rem 0;
+      animation: scroll-left 32s linear infinite;
+    }
+    .ticker-track span {
+      margin-right: 2.5rem;
+    }
+    .ticker-track span::before {
+      content: '▸ ';
+      color: var(--signal);
+    }
+    @keyframes scroll-left {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ticker-track { animation: none; }
+    }
+
+    main { padding-top: 2rem; }
+
+    footer {
+      margin-top: 4rem;
+      padding-top: 1.25rem;
+      border-top: 1px solid var(--rule);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--ink-soft);
+      text-align: center;
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1><a href="/">동건의 블로그</a></h1>
-  </header>
-  <main>
-    <slot />
-  </main>
+  <div class="wrap">
+    <header class="masthead">
+      <div class="eyebrow">PERSONAL DISPATCH · SINCE 2026</div>
+      <h1><a href="/">동건 리포트</a></h1>
+      <div class="dateline">{dateStr}</div>
+    </header>
+    <hr class="rule-thick" />
+  </div>
+
+  <div class="ticker-bar">
+    <div class="ticker-track">
+      {tags.length > 0
+        ? [...tags, ...tags].map((t) => <span>{t}</span>)
+        : <span>편집 중인 이슈가 곧 업데이트됩니다</span>}
+    </div>
+  </div>
+
+  <div class="wrap">
+    <main>
+      <slot />
+    </main>
+    <footer>동건 리포트 · 개인 아카이브</footer>
+  </div>
 </body>
 </html>
