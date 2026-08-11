@@ -1,7 +1,7 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
-import { CATEGORIES, categoryLabel } from '../../lib/categories.js';
+import { CATEGORIES, categoryLabel, categoryColor } from '../../lib/categories.js';
 
 export async function getStaticPaths() {
   return CATEGORIES.map((c) => ({ params: { category: c.id } }));
@@ -25,12 +25,12 @@ function fmtDate(d) {
       margin-bottom: 1.8rem;
     }
     .page-head h1 {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       font-size: 1.7rem;
       margin: 0;
       color: var(--ink);
     }
-    .page-head h1::before { content: '▮ '; color: var(--gold); }
+    .page-head h1::before { content: '▮ '; color: var(--cat-color, var(--gold)); }
     .page-head .count {
       font-family: 'IBM Plex Mono', monospace;
       font-size: 0.75rem;
@@ -55,9 +55,14 @@ function fmtDate(d) {
       display: block;
       padding: 0.6rem;
       border: 1px solid transparent;
+      border-left: 3px solid transparent;
       transition: border-color 0.2s ease, transform 0.15s ease;
     }
-    .card:hover { border-color: var(--gold); transform: translateY(-2px); }
+    .card:hover {
+      border-color: var(--gold);
+      border-left-color: var(--cat-color, var(--gold));
+      transform: translateY(-2px);
+    }
     .card .thumb {
       background: var(--bg-raised);
       border: 1px solid var(--rule);
@@ -75,7 +80,7 @@ function fmtDate(d) {
       color: var(--ink-soft);
     }
     .card h3 {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       font-size: 1.05rem;
       line-height: 1.42;
       margin: 0 0 0.45rem;
@@ -90,7 +95,7 @@ function fmtDate(d) {
   </style>
 
   <div class="page-head">
-    <h1>{categoryLabel(category)}</h1>
+    <h1 style={`--cat-color: ${categoryColor(category)}`}>{categoryLabel(category)}</h1>
     <div class="count">총 {posts.length}건</div>
   </div>
 
@@ -98,7 +103,7 @@ function fmtDate(d) {
 
   <div class="grid">
     {posts.map((post) => (
-      <a href={`/blog/${post.slug}/`} class="card">
+      <a href={`/blog/${post.slug}/`} class="card" style={`--cat-color: ${categoryColor(category)}`}>
         <div class="thumb">
           {post.data.image
             ? <img src={post.data.image} alt={post.data.title} />

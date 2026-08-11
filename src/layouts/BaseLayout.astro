@@ -18,7 +18,7 @@ const dateStr = today.toLocaleDateString('ko-KR', {
   <title>{title} | 탑건 부동산</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Pretendard:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Pretendard:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg: #ffffff;
@@ -92,8 +92,8 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       text-align: center;
     }
     .masthead h1 {
-      font-family: 'Noto Serif KR', serif;
-      font-weight: 900;
+      font-family: 'Gowun Batang', serif;
+      font-weight: 700;
       font-size: clamp(2.2rem, 6vw, 3.1rem);
       margin: 0;
       letter-spacing: -0.01em;
@@ -127,6 +127,15 @@ const dateStr = today.toLocaleDateString('ko-KR', {
     nav.catnav a:hover {
       border-bottom-color: var(--gold);
       color: var(--gold);
+    }
+    nav.catnav .cat-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 0.4rem;
+      background: var(--cat-color);
+      vertical-align: middle;
     }
 
     .rule-thick { border: none; border-top: 1px solid var(--rule); margin: 0; }
@@ -184,7 +193,11 @@ const dateStr = today.toLocaleDateString('ko-KR', {
     </header>
     <nav class="catnav">
       <a href="/">전체</a>
-      {CATEGORIES.map((c) => <a href={`/category/${c.id}/`}>{c.label}</a>)}
+      {CATEGORIES.map((c) => (
+        <a href={`/category/${c.id}/`}>
+          <span class="cat-dot" style={`--cat-color: ${c.color}`}></span>{c.label}
+        </a>
+      ))}
     </nav>
   </div>
   <hr class="rule-thick" />

@@ -1,7 +1,7 @@
 ---
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
-import { categoryLabel } from '../../lib/categories.js';
+import { categoryLabel, categoryColor } from '../../lib/categories.js';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog');
@@ -27,7 +27,7 @@ function fmtDate(d) {
       font-size: 0.68rem;
       letter-spacing: 0.1em;
       color: var(--bg);
-      background: var(--gold);
+      background: var(--cat-color, var(--gold));
       padding: 0.22rem 0.55rem;
       margin-bottom: 0.8rem;
     }
@@ -46,7 +46,7 @@ function fmtDate(d) {
       padding: 0.2rem 0.5rem;
     }
     .article-head h1 {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       font-size: clamp(1.8rem, 4.5vw, 2.5rem);
       line-height: 1.38;
       margin: 0 0 0.7rem;
@@ -70,7 +70,7 @@ function fmtDate(d) {
       color: var(--ink);
     }
     article :global(h2), article :global(h3) {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       color: var(--ink);
     }
     article :global(img) {
@@ -94,7 +94,7 @@ function fmtDate(d) {
   </style>
 
   <div class="article-head">
-    <span class="category-badge">{categoryLabel(post.data.category)}</span>
+    <span class="category-badge" style={`--cat-color: ${categoryColor(post.data.category)}`}>{categoryLabel(post.data.category)}</span>
     <div class="tag-row">
       {post.data.tags.map((t) => <span>{t}</span>)}
     </div>

@@ -1,7 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
-import { CATEGORIES, categoryLabel } from '../lib/categories.js';
+import { CATEGORIES, categoryLabel, categoryColor } from '../lib/categories.js';
 
 const allPosts = (await getCollection('blog')).sort(
   (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
@@ -74,13 +74,13 @@ function fmtDate(d) {
       font-size: 0.68rem;
       letter-spacing: 0.1em;
       color: var(--bg);
-      background: var(--gold);
+      background: var(--cat-color, var(--gold));
       padding: 0.22rem 0.55rem;
       margin-bottom: 0.8rem;
       width: fit-content;
     }
     .featured h2 {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       font-size: clamp(1.5rem, 3.5vw, 2.15rem);
       line-height: 1.32;
       margin: 0 0 0.7rem;
@@ -108,14 +108,14 @@ function fmtDate(d) {
       margin-bottom: 1.6rem;
     }
     .section-head h2 {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       font-size: 1.2rem;
       margin: 0;
       color: var(--ink);
     }
     .section-head h2::before {
       content: '▮ ';
-      color: var(--gold);
+      color: var(--cat-color, var(--gold));
     }
     .section-head a {
       font-family: 'IBM Plex Mono', monospace;
@@ -136,10 +136,12 @@ function fmtDate(d) {
       display: block;
       padding: 0.6rem;
       border: 1px solid transparent;
+      border-left: 3px solid transparent;
       transition: border-color 0.2s ease, transform 0.15s ease;
     }
     .card:hover {
       border-color: var(--gold);
+      border-left-color: var(--cat-color, var(--gold));
       transform: translateY(-2px);
     }
     .card .thumb {
@@ -164,7 +166,7 @@ function fmtDate(d) {
       color: var(--ink-soft);
     }
     .card h3 {
-      font-family: 'Noto Serif KR', serif;
+      font-family: 'Gowun Batang', serif;
       font-size: 1.05rem;
       line-height: 1.42;
       margin: 0 0 0.45rem;
@@ -185,7 +187,7 @@ function fmtDate(d) {
           : <span class="noimg">NO IMAGE</span>}
       </a>
       <div class="body">
-        <span class="eyebrow-tag">{categoryLabel(featured.data.category)}</span>
+        <span class="eyebrow-tag" style={`--cat-color: ${categoryColor(featured.data.category)}`}>{categoryLabel(featured.data.category)}</span>
         <h2><a href={`/blog/${featured.slug}/`}>{featured.data.title}</a></h2>
         <p class="desc">{featured.data.description}</p>
         <div class="meta">{fmtDate(featured.data.pubDate)}</div>
@@ -196,12 +198,12 @@ function fmtDate(d) {
   {sections.map((section) => (
     <div class="section-block">
       <div class="section-head">
-        <h2>{section.label}</h2>
+        <h2 style={`--cat-color: ${section.color}`}>{section.label}</h2>
         <a href={`/category/${section.id}/`}>전체 보기 →</a>
       </div>
       <div class="grid">
         {section.posts.map((post) => (
-          <a href={`/blog/${post.slug}/`} class="card">
+          <a href={`/blog/${post.slug}/`} class="card" style={`--cat-color: ${categoryColor(post.data.category)}`}>
             <div class="thumb">
               {post.data.image
                 ? <img src={post.data.image} alt={post.data.title} />
