@@ -68,8 +68,11 @@ export default async function handler(req, res) {
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
-    const { title, tags, body: polishedBody, description, imagePrompt } =
+    const { title, tags, body: polishedBody, description, imagePrompt, category } =
       await polishWithClaude(rawContent || '(사진 첨부)');
+
+    const validCategories = ['real-estate', 'stocks', 'economy', 'tips'];
+    const safeCategory = validCategories.includes(category) ? category : 'real-estate';
 
     const slug = makeSlug(title);
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -98,7 +101,8 @@ export default async function handler(req, res) {
 title: "${escapeYaml(title)}"
 description: "${escapeYaml(description)}"
 pubDate: ${dateStr}
-tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]${imageFrontmatter}
+tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]
+category: "${safeCategory}"${imageFrontmatter}
 ---
 
 ${polishedBody}
@@ -128,6 +132,12 @@ async function polishWithClaude(rawContent) {
 - 사용자가 최신 정보나 사실관계가 필요한 주제(시황, 뉴스, 순위, 가격, 일정 등)를 요청했다면: web_search 도구를 사용해서 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해.
 - 특정 문장을 그대로 길게 베끼지 말고 항상 네 표현으로 다시 써.
 - "imagePrompt" 필드에는 이 글의 대표 이미지를 생성할 때 쓸 짧은 영어 이미지 프롬프트를 만들어줘 (실제 인물/브랜드명 없이, 분위기와 장면 위주로).
+- "category" 필드에는 아래 4개 중 내용에 가장 맞는 것 하나를 정확히 그대로 적어(다른 값 금지):
+  - "real-estate" : 부동산 시세, 정책, 청약, 재건축 등
+  - "stocks" : 국내외 증시, 종목, 섹터 이슈
+  - "economy" : 금리, 환율, 세제개편, 정부 경제정책 전반
+  - "tips" : 절세, 대출 전략, 자산배분 등 실용 재테크 팁
+  - 애매하면 가장 가까운 것으로 판단해서 고르고, 절대 다른 문자열을 쓰지 마.
 
 검색이 필요한 경우 먼저 web_search로 조사한 다음, 마지막 응답으로 반드시 아래 JSON 형식만 출력해.
 그 외의 경우에도 최종 응답은 항상 이 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마:
@@ -136,7 +146,8 @@ async function polishWithClaude(rawContent) {
   "description": "1문장 요약",
   "tags": ["태그1", "태그2"],
   "body": "마크다운 형식의 다듬어진 본문",
-  "imagePrompt": "짧은 영어 이미지 생성 프롬프트"
+  "imagePrompt": "짧은 영어 이미지 생성 프롬프트",
+  "category": "real-estate|stocks|economy|tips 중 하나"
 }`;
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {

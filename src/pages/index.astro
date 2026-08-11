@@ -1,6 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
+import { CATEGORIES, categoryLabel } from '../lib/categories.js';
 
 const allPosts = (await getCollection('blog')).sort(
   (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
@@ -8,6 +9,11 @@ const allPosts = (await getCollection('blog')).sort(
 
 const [featured, ...rest] = allPosts;
 const allTags = [...new Set(allPosts.flatMap((p) => p.data.tags))];
+
+const sections = CATEGORIES.map((cat) => ({
+  ...cat,
+  posts: rest.filter((p) => p.data.category === cat.id).slice(0, 3)
+})).filter((s) => s.posts.length > 0);
 
 function fmtDate(d) {
   return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '');
@@ -29,7 +35,7 @@ function fmtDate(d) {
       gap: 1.75rem;
       align-items: stretch;
       padding-bottom: 2.5rem;
-      margin-bottom: 2.5rem;
+      margin-bottom: 3rem;
       border-bottom: 1px solid var(--rule);
     }
     @media (max-width: 700px) {
@@ -87,16 +93,26 @@ function fmtDate(d) {
       color: var(--ink-soft);
     }
 
-    .section-label {
-      font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.72rem;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: var(--ink-soft);
+    .section-block { margin-bottom: 3rem; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
       border-bottom: 1px solid var(--ink);
       padding-bottom: 0.5rem;
       margin-bottom: 1.5rem;
     }
+    .section-head h2 {
+      font-family: 'Noto Serif KR', serif;
+      font-size: 1.15rem;
+      margin: 0;
+    }
+    .section-head a {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--ink-soft);
+    }
+    .section-head a:hover { color: var(--signal); }
 
     .grid {
       display: grid;
@@ -147,7 +163,7 @@ function fmtDate(d) {
           : <span class="noimg">NO IMAGE</span>}
       </a>
       <div class="body">
-        <span class="eyebrow-tag">{featured.data.tags[0] || 'REPORT'}</span>
+        <span class="eyebrow-tag">{categoryLabel(featured.data.category)}</span>
         <h2><a href={`/blog/${featured.slug}/`}>{featured.data.title}</a></h2>
         <p class="desc">{featured.data.description}</p>
         <div class="meta">{fmtDate(featured.data.pubDate)}</div>
@@ -155,11 +171,14 @@ function fmtDate(d) {
     </article>
   )}
 
-  {rest.length > 0 && (
-    <>
-      <div class="section-label">지난 기사</div>
+  {sections.map((section) => (
+    <div class="section-block">
+      <div class="section-head">
+        <h2>{section.label}</h2>
+        <a href={`/category/${section.id}/`}>전체 보기 →</a>
+      </div>
       <div class="grid">
-        {rest.map((post) => (
+        {section.posts.map((post) => (
           <a href={`/blog/${post.slug}/`} class="card">
             <div class="thumb">
               {post.data.image
@@ -167,10 +186,10 @@ function fmtDate(d) {
                 : <span class="noimg">NO IMAGE</span>}
             </div>
             <h3>{post.data.title}</h3>
-            <div class="meta">{fmtDate(post.data.pubDate)} · {post.data.tags[0] || ''}</div>
+            <div class="meta">{fmtDate(post.data.pubDate)}</div>
           </a>
         ))}
       </div>
-    </>
-  )}
+    </div>
+  ))}
 </BaseLayout>

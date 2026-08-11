@@ -1,4 +1,6 @@
 ---
+import { CATEGORIES } from '../lib/categories.js';
+
 const { title, tags = [] } = Astro.props;
 const today = new Date();
 const dateStr = today.toLocaleDateString('ko-KR', {
@@ -72,10 +74,29 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       color: var(--ink-soft);
     }
 
+    /* 카테고리 내비게이션 */
+    nav.catnav {
+      display: flex;
+      justify-content: center;
+      gap: 1.75rem;
+      padding: 0.9rem 0;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82rem;
+      letter-spacing: 0.03em;
+    }
+    nav.catnav a {
+      padding-bottom: 0.2rem;
+      border-bottom: 2px solid transparent;
+    }
+    nav.catnav a:hover {
+      border-bottom-color: var(--signal);
+      color: var(--signal);
+    }
+
     .rule-thick {
       border: none;
       border-top: 3px solid var(--ink);
-      margin: 1rem 0 0;
+      margin: 0;
     }
     .rule-thin {
       border: none;
@@ -133,6 +154,10 @@ const dateStr = today.toLocaleDateString('ko-KR', {
       <h1><a href="/">동건 리포트</a></h1>
       <div class="dateline">{dateStr}</div>
     </header>
+    <nav class="catnav">
+      <a href="/">전체</a>
+      {CATEGORIES.map((c) => <a href={`/category/${c.id}/`}>{c.label}</a>)}
+    </nav>
     <hr class="rule-thick" />
   </div>
 
