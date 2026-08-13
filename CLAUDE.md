@@ -22,6 +22,20 @@ npm run preview   # serve the built output locally
 
 There is no lint, format, or test setup in this repo — don't assume one exists.
 
+## Required workflow before committing
+
+Node/npm availability is session-dependent — don't assume `node`/`npm` are missing just because a prior session in this project couldn't find them; run `node -v` fresh each session to check.
+
+When Node.js is available, follow this sequence for every code change in this repo, in order:
+
+1. Edit the file(s).
+2. Run `npm run build` and confirm it completes with no build errors.
+3. For logic that a build can't verify — date/time math, JSON parsing/fallback behavior, anything in `api/telegram-webhook.js` that isn't exercised by the Astro build — run that logic in isolation with `node -e "..."` and inspect the actual printed output, don't just eyeball the code.
+4. Only `git commit` and `push` after both checks above pass.
+5. If the build fails or a `node -e` check prints something unexpected, stop — do not push. Explain the failure/discrepancy first and wait before proceeding.
+
+If Node truly isn't available in the current session (checked and confirmed missing), say so explicitly and fall back to careful manual review plus checking the live deployed site, rather than silently skipping verification.
+
 ## Architecture
 
 ### Content model
