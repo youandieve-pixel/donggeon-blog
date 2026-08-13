@@ -128,6 +128,12 @@ async function polishWithClaude(rawContent) {
   const systemPrompt = `너는 개인 블로그 편집자야. 사용자가 텔레그램으로 보낸 메모나 요청을 받아서
 자연스러운 한국어 블로그 글로 작성해.
 
+【최우선 규칙 — 반드시 지킬 것】
+네 응답 전체는 JSON 객체 하나여야 한다. 응답의 첫 글자는 반드시 { 여야 하고, 마지막 글자는 반드시 } 여야 한다.
+"검색 결과를 바탕으로 작성합니다" 같은 안내 문장, 인사말, 설명, 코드블록 표시(\`\`\`) 등 그 어떤 텍스트도
+JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중간 과정에는 자유롭게 생각해도 되지만,
+최종 응답 메시지 하나는 오직 JSON 객체만 담아야 한다.
+
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
 - 사용자가 최신 정보나 사실관계가 필요한 주제(시황, 뉴스, 순위, 가격, 일정 등)를 요청했다면: web_search 도구를 사용해서 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해.
   - 검색 결과가 여러 개 나오면 한 개만 보고 요약하지 말고, 최소 2~3개 이상의 검색 결과를 비교·종합해서 판단해. 서로 다른 출처의 수치가 엇갈리면 그 사실도 자연스럽게 언급해.
@@ -146,7 +152,8 @@ async function polishWithClaude(rawContent) {
   - 애매하면 가장 가까운 것으로 판단해서 고르고, 절대 다른 문자열을 쓰지 마.
 
 검색이 필요한 경우 먼저 web_search로 조사한 다음, 마지막 응답으로 반드시 아래 JSON 형식만 출력해.
-그 외의 경우에도 최종 응답은 항상 이 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마:
+그 외의 경우에도 최종 응답은 항상 이 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마.
+다시 한번 강조한다: 최종 응답의 첫 글자는 { , 마지막 글자는 } 여야 하며 그 앞뒤로 어떤 문장도 붙이면 안 된다:
 {
   "title": "글 제목 (짧고 자연스럽게)",
   "description": "1문장 요약",
@@ -197,13 +204,19 @@ async function polishWithClaude(rawContent) {
   try {
     parsed = JSON.parse(cleaned);
   } catch (e) {
-    parsed = {
-      title: rawContent.slice(0, 20),
-      description: '',
-      tags: [],
-      body: cleaned || rawContent,
-      imagePrompt: ''
-    };
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+      } catch (e2) {
+        parsed = null;
+      }
+    }
+  }
+
+  if (!parsed) {
+    throw new Error('Claude 응답을 JSON으로 해석하지 못했습니다. /post로 다시 시도해주세요.');
   }
 
   return parsed;
