@@ -101,11 +101,34 @@ export default async function handler(req, res) {
 // Claude 호출 -> 이미지 처리 -> GitHub 커밋 -> 완료/오류 메시지 전송까지의 전체 파이프라인.
 // handler가 즉시 응답한 뒤 waitUntil로 계속 실행되므로, 여기서 발생하는 에러는 텔레그램 메시지로만
 // 알리고 HTTP 응답에는 영향을 주지 않는다(이미 응답이 나간 뒤이기 때문).
+//
+// 주의: 아래 try/catch는 "JS 코드 안에서 던져진 예외"만 잡을 수 있다. Vercel이 함수 실행 자체를
+// 외부에서 강제 종료(Fluid Compute 미적용으로 응답 직후 인스턴스가 얼어붙거나, maxDuration 초과로
+// 강제 종료)하면 이 catch조차 실행될 기회가 없어 완전히 무응답으로 끝날 수 있다. 그래서 내부적으로
+// SOFT_TIMEOUT_MS가 지나면 "처리가 지연되고 있다"는 안내를 먼저 보내는 안전장치를 둔다 - Vercel의
+// 실제 강제종료(maxDuration)보다 먼저 사용자에게 신호를 주기 위함이다. 다만 Fluid Compute 자체가
+// 꺼져 있어 응답 직후 즉시 얼어붙는 경우에는 이 타이머조차 실행되지 못할 수 있으니, 완료/오류
+// 메시지도 지연 안내도 전혀 오지 않는 일이 반복된다면 Vercel 프로젝트 Settings > Functions에서
+// Fluid Compute 활성화 여부를 반드시 확인할 것.
 async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
+  const startedAt = Date.now();
+  const elapsed = () => `${Date.now() - startedAt}ms`;
+
+  const SOFT_TIMEOUT_MS = 50_000; // maxDuration(60s)보다 여유를 두고 지연 안내를 먼저 보냄
+  const softTimeoutHandle = setTimeout(() => {
+    console.warn(`[processPost] ${elapsed()} 경과 - 지연 안내 전송`);
+    sendTelegram(
+      chatId,
+      '포스팅 처리가 예상보다 오래 걸리고 있습니다. 잠시 후에도 완료/오류 메시지가 오지 않으면 /post로 다시 시도해주세요.'
+    ).catch((e) => console.error('[processPost] 지연 안내 전송 실패:', e));
+  }, SOFT_TIMEOUT_MS);
+
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
+    console.log(`[processPost] ${elapsed()} Claude 호출 시작 (web_search 포함)`);
     const parsed = await polishWithClaude(rawContent || '(사진 첨부)');
+    console.log(`[processPost] ${elapsed()} Claude 호출 완료, 파싱 ${parsed ? '성공' : '실패'}`);
 
     if (!parsed) {
       await sendTelegram(chatId, '포스팅 생성 중 오류가 발생했습니다. 다시 시도해주세요');
@@ -126,15 +149,21 @@ async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
 
     if (photos && photos.length > 0) {
       await sendTelegram(chatId, '첨부한 사진 업로드 중...');
+      console.log(`[processPost] ${elapsed()} 첨부 사진 처리 시작`);
       const largest = photos[photos.length - 1];
       const imageBuffer = await downloadTelegramFile(largest.file_id);
       imagePath = await commitImageToGithub(imageBuffer, dateStr, slug, 'jpg');
+      console.log(`[processPost] ${elapsed()} 첨부 사진 GitHub 커밋 완료`);
     } else if (wantsAiImage) {
       await sendTelegram(chatId, 'AI 이미지 생성 중...');
+      console.log(`[processPost] ${elapsed()} AI 이미지 생성 시작`);
       const promptForImage = imagePrompt || title;
       const imageBuffer = await generateAiImage(promptForImage);
       if (imageBuffer) {
         imagePath = await commitImageToGithub(imageBuffer, dateStr, slug, 'jpg');
+        console.log(`[processPost] ${elapsed()} AI 이미지 GitHub 커밋 완료`);
+      } else {
+        console.warn(`[processPost] ${elapsed()} AI 이미지 생성 실패 - 이미지 없이 진행`);
       }
     }
 
@@ -151,15 +180,22 @@ category: "${safeCategory}"${imageFrontmatter}
 ${polishedBody}
 `;
 
+    console.log(`[processPost] ${elapsed()} GitHub 커밋 시작: ${filename}`);
     await commitTextToGithub(`src/content/blog/${filename}`, frontmatter, `post: ${filename}`);
+    console.log(`[processPost] ${elapsed()} GitHub 커밋 완료: ${filename}`);
 
     const siteUrl = process.env.SITE_URL || '';
     const link = `${siteUrl}/blog/${dateStr}-${slug}/`;
 
     await sendTelegram(chatId, `포스팅 완료 (1~2분 후 반영)\n제목: ${title}\n${link}`);
+    console.log(`[processPost] ${elapsed()} 전체 완료`);
   } catch (err) {
-    console.error(err);
-    await sendTelegram(chatId, `오류 발생: ${err.message}`);
+    console.error(`[processPost] ${elapsed()} 오류 발생:`, err);
+    await sendTelegram(chatId, `오류 발생: ${err.message}`).catch((e) =>
+      console.error('[processPost] 오류 메시지 전송조차 실패:', e)
+    );
+  } finally {
+    clearTimeout(softTimeoutHandle);
   }
 }
 
@@ -274,7 +310,7 @@ async function polishWithClaude(rawContent) {
     throw new Error('Claude 응답에서 텍스트를 찾을 수 없음');
   }
 
-  const cleaned = lastText.text.replace(/```json|```/g, '').trim();
+  const cleaned = sanitizeJsonControlChars(lastText.text.replace(/```json|```/g, '').trim());
 
   let parsed;
   try {
@@ -297,6 +333,47 @@ async function polishWithClaude(rawContent) {
   }
 
   return parsed;
+}
+
+// Claude가 긴 본문을 JSON 문자열 값 안에 넣으면서 개행을 "\n"으로 이스케이프하지 않고
+// 실제 개행 문자(raw newline)를 그대로 남기는 경우가 있다. JSON 스펙상 문자열 리터럴 안의
+// 이스케이프 안 된 제어 문자(개행·탭 등)는 파싱 오류를 일으키므로, 문자열 리터럴 내부에서만
+// 그런 제어 문자를 이스케이프 형태로 바꿔준다. 문자열 바깥의 구조적 개행(들여쓰기용)은 원래
+// 유효한 JSON이라 건드리지 않는다.
+function sanitizeJsonControlChars(text) {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) {
+        result += ch;
+        escaped = false;
+      } else if (ch === '\\') {
+        result += ch;
+        escaped = true;
+      } else if (ch === '"') {
+        result += ch;
+        inString = false;
+      } else if (ch === '\n') {
+        result += '\\n';
+      } else if (ch === '\r') {
+        result += '\\r';
+      } else if (ch === '\t') {
+        result += '\\t';
+      } else {
+        result += ch;
+      }
+    } else if (ch === '"') {
+      inString = true;
+      result += ch;
+    } else {
+      result += ch;
+    }
+  }
+
+  return result;
 }
 
 // 텔레그램 파일(사진) 다운로드
