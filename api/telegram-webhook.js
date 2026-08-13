@@ -1,5 +1,11 @@
 // Vercel Serverless Function
-// 텔레그램 /post 명령어 수신 -> Claude API로 다듬기(+웹서치) -> 이미지 처리 -> GitHub 커밋 -> 자동 배포
+// 텔레그램 /post 명령어 수신 -> Claude API로 글 생성 -> GitHub에 마크다운 커밋 -> 자동 배포
+//
+// [임시 최소 버전] 어제부터 포스팅이 계속 실패해서, 원인을 좁히기 위해 일부러 단순화했다.
+// 아래 두 기능은 "완전히 작동 확인될 때까지" 잠시 제거한 상태다:
+//   - web_search 도구 (tools 파라미터 자체를 뺌 - Claude가 순수 텍스트 생성만 함)
+//   - 이미지 생성/첨부 (AI이미지 키워드, 사진 첨부, Pollinations 연동 전부 제거)
+// 이 최소 파이프라인이 안정적으로 동작하는 게 확인되면, 웹서치와 이미지 기능을 하나씩 다시 붙인다.
 //
 // 필요한 환경변수 (Vercel 프로젝트 Settings > Environment Variables 에 등록):
 //   TELEGRAM_BOT_TOKEN      : BotFather에서 발급받은 토큰
@@ -15,19 +21,14 @@
 //   KV_REST_API_URL / KV_REST_API_TOKEN             : Vercel KV (Upstash Redis) REST 접속 정보
 //   (또는) UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
 //
-// 사용법:
-//   /post 텍스트만                       -> 이미지 없이 포스팅
-//   /post 텍스트 (사진 첨부해서 캡션으로) -> 첨부한 사진이 글 대표 이미지로 삽입
-//   /post 텍스트 AI이미지                -> 내용 기반으로 AI가 대표 이미지 자동 생성해서 삽입
+// 사용법: /post 텍스트  -> 이미지 없이 포스팅
 //
 // 응답 지연 방지: 텔레그램은 웹훅이 몇 초 안에 200을 응답하지 않으면 같은 업데이트를 재전송한다.
-// Claude 호출+웹서치+이미지 생성+GitHub 커밋까지 합치면 수십 초가 걸릴 수 있어서, 예전에는 그 전체가
-// 끝난 뒤에야 응답했고 그 사이 텔레그램이 같은 메시지를 여러 번 재전송해 글이 중복 생성됐다.
-// 지금은 인증/파싱/dedup 체크까지만 동기로 끝내고 즉시 200을 응답한 뒤, 무거운 처리는
-// @vercel/functions의 waitUntil로 응답 이후에도 계속 실행되게 분리했다.
-// waitUntil이 응답 이후 실행을 실제로 보장하려면 Vercel 프로젝트에 Fluid Compute가 켜져 있어야 한다
-// (Vercel이 새 프로젝트에 기본으로 켜주는 설정). 혹시 "포스팅 완료" 메시지가 끝까지 오지 않는다면
-// Vercel 프로젝트 Settings > Functions에서 Fluid Compute 활성화 여부를 확인할 것.
+// 그래서 인증/파싱/dedup 체크까지만 동기로 끝내고 즉시 200을 응답한 뒤, 무거운 처리(Claude 호출,
+// GitHub 커밋)는 @vercel/functions의 waitUntil로 응답 이후에도 계속 실행되게 분리했다.
+// waitUntil이 응답 이후 실행을 실제로 보장하려면 Vercel 프로젝트에 Fluid Compute가 켜져 있어야 한다.
+// 혹시 "포스팅 완료" 메시지가 끝까지 오지 않는다면 Vercel 프로젝트 Settings > Functions에서
+// Fluid Compute 활성화 여부를 확인할 것.
 
 import { waitUntil } from '@vercel/functions';
 
@@ -51,9 +52,7 @@ export default async function handler(req, res) {
     return res.status(200).send('ignored');
   }
 
-  // 사진과 함께 온 메시지는 text가 아니라 caption 필드에 글자가 들어있음
-  const rawText = (message.text || message.caption || '').trim();
-  const photos = message.photo; // 여러 해상도 배열, 마지막이 제일 고화질
+  const rawText = (message.text || '').trim();
 
   if (!rawText) {
     return res.status(200).send('ignored');
@@ -70,9 +69,9 @@ export default async function handler(req, res) {
     return res.status(200).send('ignored');
   }
 
-  let rawContent = rawText.replace(/^\/post\s*/, '').trim();
+  const rawContent = rawText.replace(/^\/post\s*/, '').trim();
 
-  if (!rawContent && !photos) {
+  if (!rawContent) {
     await sendTelegram(chatId, '/post 뒤에 내용을 입력해줘. 예: /post 오늘 있었던 일...');
     return res.status(200).send('empty content');
   }
@@ -87,30 +86,22 @@ export default async function handler(req, res) {
     }
   }
 
-  // "AI이미지" 키워드 감지 (있으면 제거하고 플래그로 기억)
-  const wantsAiImage = /AI\s*이미지/i.test(rawContent);
-  rawContent = rawContent.replace(/AI\s*이미지/gi, '').trim();
-
   // 여기서부터가 무거운 처리. await 하지 않고 waitUntil에 넘겨서, 응답을 먼저 보낸 뒤에도
   // 함수 인스턴스가 이 프라미스가 끝날 때까지 계속 실행되게 한다.
-  waitUntil(processPost({ chatId, rawContent, photos, wantsAiImage }));
+  waitUntil(processPost({ chatId, rawContent }));
 
   return res.status(200).send('accepted');
 }
 
-// Claude 호출 -> 이미지 처리 -> GitHub 커밋 -> 완료/오류 메시지 전송까지의 전체 파이프라인.
+// Claude 호출 -> GitHub 커밋 -> 완료/오류 메시지 전송까지의 전체 파이프라인.
 // handler가 즉시 응답한 뒤 waitUntil로 계속 실행되므로, 여기서 발생하는 에러는 텔레그램 메시지로만
 // 알리고 HTTP 응답에는 영향을 주지 않는다(이미 응답이 나간 뒤이기 때문).
 //
 // 주의: 아래 try/catch는 "JS 코드 안에서 던져진 예외"만 잡을 수 있다. Vercel이 함수 실행 자체를
 // 외부에서 강제 종료(Fluid Compute 미적용으로 응답 직후 인스턴스가 얼어붙거나, maxDuration 초과로
 // 강제 종료)하면 이 catch조차 실행될 기회가 없어 완전히 무응답으로 끝날 수 있다. 그래서 내부적으로
-// SOFT_TIMEOUT_MS가 지나면 "처리가 지연되고 있다"는 안내를 먼저 보내는 안전장치를 둔다 - Vercel의
-// 실제 강제종료(maxDuration)보다 먼저 사용자에게 신호를 주기 위함이다. 다만 Fluid Compute 자체가
-// 꺼져 있어 응답 직후 즉시 얼어붙는 경우에는 이 타이머조차 실행되지 못할 수 있으니, 완료/오류
-// 메시지도 지연 안내도 전혀 오지 않는 일이 반복된다면 Vercel 프로젝트 Settings > Functions에서
-// Fluid Compute 활성화 여부를 반드시 확인할 것.
-async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
+// SOFT_TIMEOUT_MS가 지나면 "처리가 지연되고 있다"는 안내를 먼저 보내는 안전장치를 둔다.
+async function processPost({ chatId, rawContent }) {
   const startedAt = Date.now();
   const elapsed = () => `${Date.now() - startedAt}ms`;
 
@@ -126,8 +117,8 @@ async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
-    console.log(`[processPost] ${elapsed()} Claude 호출 시작 (web_search 포함)`);
-    const parsed = await polishWithClaude(rawContent || '(사진 첨부)');
+    console.log(`[processPost] ${elapsed()} Claude 호출 시작 (웹서치 없음)`);
+    const parsed = await polishWithClaude(rawContent);
     console.log(`[processPost] ${elapsed()} Claude 호출 완료, 파싱 ${parsed ? '성공' : '실패'}`);
 
     if (!parsed) {
@@ -135,7 +126,7 @@ async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
       return;
     }
 
-    const { title, tags, body: polishedBody, description, imagePrompt, category } = parsed;
+    const { title, tags, body: polishedBody, description, category } = parsed;
 
     const validCategories = ['real-estate', 'stocks', 'economy', 'tips'];
     const safeCategory = validCategories.includes(category) ? category : 'real-estate';
@@ -144,37 +135,12 @@ async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
     const { dateStr, pubDateValue } = getKstDateAndPubDate();
     const filename = `${dateStr}-${slug}.md`;
 
-    // 이미지 처리: 1) 사용자가 사진 첨부 2) AI이미지 요청 3) 없음
-    let imagePath = null;
-
-    if (photos && photos.length > 0) {
-      await sendTelegram(chatId, '첨부한 사진 업로드 중...');
-      console.log(`[processPost] ${elapsed()} 첨부 사진 처리 시작`);
-      const largest = photos[photos.length - 1];
-      const imageBuffer = await downloadTelegramFile(largest.file_id);
-      imagePath = await commitImageToGithub(imageBuffer, dateStr, slug, 'jpg');
-      console.log(`[processPost] ${elapsed()} 첨부 사진 GitHub 커밋 완료`);
-    } else if (wantsAiImage) {
-      await sendTelegram(chatId, 'AI 이미지 생성 중...');
-      console.log(`[processPost] ${elapsed()} AI 이미지 생성 시작`);
-      const promptForImage = imagePrompt || title;
-      const imageBuffer = await generateAiImage(promptForImage);
-      if (imageBuffer) {
-        imagePath = await commitImageToGithub(imageBuffer, dateStr, slug, 'jpg');
-        console.log(`[processPost] ${elapsed()} AI 이미지 GitHub 커밋 완료`);
-      } else {
-        console.warn(`[processPost] ${elapsed()} AI 이미지 생성 실패 - 이미지 없이 진행`);
-      }
-    }
-
-    const imageFrontmatter = imagePath ? `\nimage: "${imagePath}"` : '';
-
     const frontmatter = `---
 title: "${escapeYaml(title)}"
 description: "${escapeYaml(description)}"
 pubDate: ${pubDateValue}
 tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]
-category: "${safeCategory}"${imageFrontmatter}
+category: "${safeCategory}"
 ---
 
 ${polishedBody}
@@ -235,27 +201,23 @@ async function isDuplicateUpdate(updateId) {
   }
 }
 
-// Claude API로 제목/태그/요약 생성 + 본문 다듬기 (필요 시 웹서치 활용)
+// Claude API로 제목/태그/요약 생성 + 본문 다듬기 (웹서치 없음 - 순수 텍스트 생성만)
 async function polishWithClaude(rawContent) {
   const systemPrompt = `너는 개인 블로그 편집자야. 사용자가 텔레그램으로 보낸 메모나 요청을 받아서
 자연스러운 한국어 블로그 글로 작성해.
 
 【최우선 규칙 — 반드시 지킬 것】
 응답은 반드시 순수 JSON 객체 하나여야 하고, 첫 글자는 반드시 '{', 마지막 글자는 반드시 '}' 여야 하며,
-그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. "검색 결과를 바탕으로 작성합니다"
-같은 안내 문장, 인사말도 금지다. web_search로 조사하는 중간 과정에는 자유롭게 생각해도 되지만,
-최종 응답 메시지 하나는 오직 JSON 객체만 담아야 한다.
+그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. 인사말도 금지다.
 
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
-- 사용자가 최신 정보나 사실관계가 필요한 주제(시황, 뉴스, 순위, 가격, 일정 등)를 요청했다면: web_search 도구를 사용해서 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해.
-  - 검색 결과가 여러 개 나오면 한 개만 보고 요약하지 말고, 최소 2~3개 이상의 검색 결과를 비교·종합해서 판단해. 서로 다른 출처의 수치가 엇갈리면 그 사실도 자연스럽게 언급해.
+- 웹서치를 쓸 수 없으니, 확인할 수 없는 최신 수치나 사실을 지어내지 마라. 사용자가 준 내용과 네가 이미 알고 있는 일반적인 배경 지식 범위 안에서만 작성해.
 - 표면적인 요약에 그치지 말고 깊이 있게 써:
-  - 구체적인 수치(퍼센트, 금액, 기간, 날짜 등)를 반드시 포함하고, "많이 올랐다", "큰 폭으로 하락" 같은 뭉뚱그린 표현 대신 정확한 데이터로 서술해.
+  - 사용자가 준 내용 안에 있는 구체적인 사실(수치, 기간, 날짜 등)은 그대로 살려서 서술해.
   - 단순 사실 나열로 끝내지 말고, 왜 이 일이 중요한지·어떤 배경과 맥락에서 발생했는지까지 짚어줘.
   - 글 구조는 자연스러운 소제목을 활용해 "배경/맥락 → 핵심 변화 내용 → 실질적 영향(예: 독자에게 실제로 뭐가 달라지는지) → 전망 또는 시사점" 이 4단계 흐름으로 구성해.
   - 본문(body)은 최소 800자 이상으로 작성해. 너무 짧게 끝내지 마.
 - 특정 문장을 그대로 길게 베끼지 말고 항상 네 표현으로 다시 써.
-- "imagePrompt" 필드에는 이 글의 대표 이미지를 생성할 때 쓸 짧은 영어 이미지 프롬프트를 만들어줘 (실제 인물/브랜드명 없이, 분위기와 장면 위주로).
 - "category" 필드에는 아래 4개 중 내용에 가장 맞는 것 하나를 정확히 그대로 적어(다른 값 금지):
   - "real-estate" : 부동산 시세, 정책, 청약, 재건축 등
   - "stocks" : 국내외 증시, 종목, 섹터 이슈
@@ -263,15 +225,13 @@ async function polishWithClaude(rawContent) {
   - "tips" : 절세, 대출 전략, 자산배분 등 실용 재테크 팁
   - 애매하면 가장 가까운 것으로 판단해서 고르고, 절대 다른 문자열을 쓰지 마.
 
-검색이 필요한 경우 먼저 web_search로 조사한 다음, 마지막 응답으로 반드시 아래 JSON 형식만 출력해.
-그 외의 경우에도 최종 응답은 항상 이 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마.
+최종 응답은 항상 아래 JSON 하나만 출력해. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마.
 다시 한번 강조한다: 최종 응답의 첫 글자는 { , 마지막 글자는 } 여야 하며 그 앞뒤로 어떤 문장도 붙이면 안 된다:
 {
   "title": "글 제목 (짧고 자연스럽게)",
   "description": "1문장 요약",
   "tags": ["태그1", "태그2"],
   "body": "마크다운 형식의 다듬어진 본문",
-  "imagePrompt": "짧은 영어 이미지 생성 프롬프트",
   "category": "real-estate|stocks|economy|tips 중 하나"
 }`;
 
@@ -286,14 +246,7 @@ async function polishWithClaude(rawContent) {
       model: 'claude-sonnet-4-6',
       max_tokens: 4000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: rawContent }],
-      tools: [
-        {
-          type: 'web_search_20250305',
-          name: 'web_search',
-          max_uses: 5
-        }
-      ]
+      messages: [{ role: 'user', content: rawContent }]
     })
   });
 
@@ -376,68 +329,9 @@ function sanitizeJsonControlChars(text) {
   return result;
 }
 
-// 텔레그램 파일(사진) 다운로드
-async function downloadTelegramFile(fileId) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-
-  const fileInfoRes = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
-  const fileInfo = await fileInfoRes.json();
-
-  if (!fileInfo.ok) {
-    throw new Error('텔레그램 파일 정보 조회 실패');
-  }
-
-  const filePath = fileInfo.result.file_path;
-  const fileUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
-
-  const fileRes = await fetch(fileUrl);
-  if (!fileRes.ok) {
-    throw new Error('텔레그램 파일 다운로드 실패');
-  }
-
-  const arrayBuffer = await fileRes.arrayBuffer();
-  return Buffer.from(arrayBuffer);
-}
-
-// 무료 이미지 생성 서비스(Pollinations)로 AI 이미지 생성
-async function generateAiImage(prompt) {
-  try {
-    const encodedPrompt = encodeURIComponent(prompt);
-    const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&nologo=true`;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      return null;
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
-  } catch (e) {
-    console.error('AI 이미지 생성 실패:', e);
-    return null;
-  }
-}
-
-// 이미지를 GitHub public/images 폴더에 커밋하고, 사이트에서 접근 가능한 경로를 반환
-async function commitImageToGithub(imageBuffer, dateStr, slug, ext) {
-  const filename = `${dateStr}-${slug}.${ext}`;
-  const repoPath = `public/images/${filename}`;
-
-  await commitBinaryToGithub(repoPath, imageBuffer, `image: ${filename}`);
-
-  // Astro에서 public/ 폴더는 사이트 루트로 그대로 서빙됨
-  return `/images/${filename}`;
-}
-
 // GitHub Contents API로 텍스트 파일 커밋
 async function commitTextToGithub(path, content, commitMessage) {
   const contentBase64 = Buffer.from(content, 'utf-8').toString('base64');
-  await putToGithub(path, contentBase64, commitMessage);
-}
-
-// GitHub Contents API로 바이너리(이미지) 파일 커밋
-async function commitBinaryToGithub(path, buffer, commitMessage) {
-  const contentBase64 = buffer.toString('base64');
   await putToGithub(path, contentBase64, commitMessage);
 }
 
@@ -479,7 +373,7 @@ function makeSlug(title) {
   return title
     .trim()
     .toLowerCase()
-    .replace(/[^\w\uac00-\ud7a3\s-]/g, '')
+    .replace(/[^\w가-힣\s-]/g, '')
     .replace(/\s+/g, '-')
     .slice(0, 50);
 }
