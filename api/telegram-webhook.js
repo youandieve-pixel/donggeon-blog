@@ -68,8 +68,14 @@ export default async function handler(req, res) {
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
-    const { title, tags, body: polishedBody, description, imagePrompt, category } =
-      await polishWithClaude(rawContent || '(사진 첨부)');
+    const parsed = await polishWithClaude(rawContent || '(사진 첨부)');
+
+    if (!parsed) {
+      await sendTelegram(chatId, '포스팅 생성 중 오류가 발생했습니다. 다시 시도해주세요');
+      return res.status(200).send('json parse failed');
+    }
+
+    const { title, tags, body: polishedBody, description, imagePrompt, category } = parsed;
 
     const validCategories = ['real-estate', 'stocks', 'economy', 'tips'];
     const safeCategory = validCategories.includes(category) ? category : 'real-estate';
@@ -174,7 +180,10 @@ JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중
       model: 'claude-sonnet-4-6',
       max_tokens: 4000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: rawContent }],
+      messages: [
+        { role: 'user', content: rawContent },
+        { role: 'assistant', content: '{' }
+      ],
       tools: [
         {
           type: 'web_search_20250305',
@@ -198,17 +207,19 @@ JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중
     throw new Error('Claude 응답에서 텍스트를 찾을 수 없음');
   }
 
-  const cleaned = lastText.text.replace(/```json|```/g, '').trim();
+  // assistant 메시지를 '{'로 prefill해서 응답을 강제했으므로, 파싱 전에 그 '{'를 다시 앞에 붙여야 완전한 JSON이 된다.
+  const rawText = lastText.text.replace(/```json|```/g, '').trim();
+  const fullJson = '{' + rawText;
 
   let parsed;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = JSON.parse(fullJson);
   } catch (e) {
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
+    const firstBrace = fullJson.indexOf('{');
+    const lastBrace = fullJson.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace > firstBrace) {
       try {
-        parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+        parsed = JSON.parse(fullJson.slice(firstBrace, lastBrace + 1));
       } catch (e2) {
         parsed = null;
       }
@@ -216,7 +227,8 @@ JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중
   }
 
   if (!parsed) {
-    throw new Error('Claude 응답을 JSON으로 해석하지 못했습니다. /post로 다시 시도해주세요.');
+    console.error('Claude 응답 JSON 파싱 실패. 원본 응답 텍스트:', lastText.text);
+    return null;
   }
 
   return parsed;
