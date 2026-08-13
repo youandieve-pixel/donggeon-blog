@@ -2,7 +2,7 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
 import { CATEGORIES, categoryLabel, categoryColor } from '../../lib/categories.js';
-import { fmtTime, isNewPost } from '../../lib/date.js';
+import { fmtTime, isNewPost, KST_TIME_ZONE } from '../../lib/date.js';
 
 export async function getStaticPaths() {
   return CATEGORIES.map((c) => ({ params: { category: c.id } }));
@@ -15,7 +15,7 @@ const posts = (await getCollection('blog'))
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
 
 function fmtDate(d) {
-  const dateStr = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '');
+  const dateStr = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: KST_TIME_ZONE }).replace(/\. /g, '.').replace(/\.$/, '');
   return `${dateStr} ${fmtTime(d)}`;
 }
 ---
