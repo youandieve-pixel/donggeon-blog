@@ -205,9 +205,9 @@ async function polishWithClaude(rawContent) {
 자연스러운 한국어 블로그 글로 작성해.
 
 【최우선 규칙 — 반드시 지킬 것】
-네 응답 전체는 JSON 객체 하나여야 한다. 응답의 첫 글자는 반드시 { 여야 하고, 마지막 글자는 반드시 } 여야 한다.
-"검색 결과를 바탕으로 작성합니다" 같은 안내 문장, 인사말, 설명, 코드블록 표시(\`\`\`) 등 그 어떤 텍스트도
-JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중간 과정에는 자유롭게 생각해도 되지만,
+응답은 반드시 순수 JSON 객체 하나여야 하고, 첫 글자는 반드시 '{', 마지막 글자는 반드시 '}' 여야 하며,
+그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. "검색 결과를 바탕으로 작성합니다"
+같은 안내 문장, 인사말도 금지다. web_search로 조사하는 중간 과정에는 자유롭게 생각해도 되지만,
 최종 응답 메시지 하나는 오직 JSON 객체만 담아야 한다.
 
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
@@ -250,10 +250,7 @@ JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중
       model: 'claude-sonnet-4-6',
       max_tokens: 4000,
       system: systemPrompt,
-      messages: [
-        { role: 'user', content: rawContent },
-        { role: 'assistant', content: '{' }
-      ],
+      messages: [{ role: 'user', content: rawContent }],
       tools: [
         {
           type: 'web_search_20250305',
@@ -277,19 +274,17 @@ JSON 앞이나 뒤에 절대 추가하지 마라. web_search로 조사하는 중
     throw new Error('Claude 응답에서 텍스트를 찾을 수 없음');
   }
 
-  // assistant 메시지를 '{'로 prefill해서 응답을 강제했으므로, 파싱 전에 그 '{'를 다시 앞에 붙여야 완전한 JSON이 된다.
-  const rawText = lastText.text.replace(/```json|```/g, '').trim();
-  const fullJson = '{' + rawText;
+  const cleaned = lastText.text.replace(/```json|```/g, '').trim();
 
   let parsed;
   try {
-    parsed = JSON.parse(fullJson);
+    parsed = JSON.parse(cleaned);
   } catch (e) {
-    const firstBrace = fullJson.indexOf('{');
-    const lastBrace = fullJson.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
+    // 모델이 그래도 JSON 앞뒤에 설명을 붙였을 경우를 대비해, 첫 '{'부터 마지막 '}'까지만 추출해 재시도.
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
       try {
-        parsed = JSON.parse(fullJson.slice(firstBrace, lastBrace + 1));
+        parsed = JSON.parse(match[0]);
       } catch (e2) {
         parsed = null;
       }
