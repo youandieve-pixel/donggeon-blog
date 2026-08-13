@@ -11,12 +11,27 @@
 //   GITHUB_BRANCH           : 기본 브랜치명 (보통 "main")
 //   SITE_URL                : 배포된 사이트 주소
 //
+// 선택 환경변수 (update_id 중복 요청 방지용 - 없으면 dedup 없이 동작):
+//   KV_REST_API_URL / KV_REST_API_TOKEN             : Vercel KV (Upstash Redis) REST 접속 정보
+//   (또는) UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
+//
 // 사용법:
 //   /post 텍스트만                       -> 이미지 없이 포스팅
 //   /post 텍스트 (사진 첨부해서 캡션으로) -> 첨부한 사진이 글 대표 이미지로 삽입
 //   /post 텍스트 AI이미지                -> 내용 기반으로 AI가 대표 이미지 자동 생성해서 삽입
+//
+// 응답 지연 방지: 텔레그램은 웹훅이 몇 초 안에 200을 응답하지 않으면 같은 업데이트를 재전송한다.
+// Claude 호출+웹서치+이미지 생성+GitHub 커밋까지 합치면 수십 초가 걸릴 수 있어서, 예전에는 그 전체가
+// 끝난 뒤에야 응답했고 그 사이 텔레그램이 같은 메시지를 여러 번 재전송해 글이 중복 생성됐다.
+// 지금은 인증/파싱/dedup 체크까지만 동기로 끝내고 즉시 200을 응답한 뒤, 무거운 처리는
+// @vercel/functions의 waitUntil로 응답 이후에도 계속 실행되게 분리했다.
+// waitUntil이 응답 이후 실행을 실제로 보장하려면 Vercel 프로젝트에 Fluid Compute가 켜져 있어야 한다
+// (Vercel이 새 프로젝트에 기본으로 켜주는 설정). 혹시 "포스팅 완료" 메시지가 끝까지 오지 않는다면
+// Vercel 프로젝트 Settings > Functions에서 Fluid Compute 활성화 여부를 확인할 것.
 
-export const config = { runtime: 'nodejs' };
+import { waitUntil } from '@vercel/functions';
+
+export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -30,6 +45,7 @@ export default async function handler(req, res) {
 
   const body = req.body;
   const message = body?.message;
+  const updateId = body?.update_id;
 
   if (!message) {
     return res.status(200).send('ignored');
@@ -61,10 +77,31 @@ export default async function handler(req, res) {
     return res.status(200).send('empty content');
   }
 
+  // update_id 기반 중복 요청 방지. 서버리스 인스턴스는 매번 새로 뜰 수 있어 메모리 변수로는
+  // 신뢰할 수 없으므로, 외부 저장소(Vercel KV/Upstash Redis)에 SET NX EX로 짧게 마킹해둔다.
+  if (updateId !== undefined) {
+    const duplicate = await isDuplicateUpdate(updateId);
+    if (duplicate) {
+      console.warn(`중복 update_id 감지, 무시함: ${updateId}`);
+      return res.status(200).send('duplicate ignored');
+    }
+  }
+
   // "AI이미지" 키워드 감지 (있으면 제거하고 플래그로 기억)
   const wantsAiImage = /AI\s*이미지/i.test(rawContent);
   rawContent = rawContent.replace(/AI\s*이미지/gi, '').trim();
 
+  // 여기서부터가 무거운 처리. await 하지 않고 waitUntil에 넘겨서, 응답을 먼저 보낸 뒤에도
+  // 함수 인스턴스가 이 프라미스가 끝날 때까지 계속 실행되게 한다.
+  waitUntil(processPost({ chatId, rawContent, photos, wantsAiImage }));
+
+  return res.status(200).send('accepted');
+}
+
+// Claude 호출 -> 이미지 처리 -> GitHub 커밋 -> 완료/오류 메시지 전송까지의 전체 파이프라인.
+// handler가 즉시 응답한 뒤 waitUntil로 계속 실행되므로, 여기서 발생하는 에러는 텔레그램 메시지로만
+// 알리고 HTTP 응답에는 영향을 주지 않는다(이미 응답이 나간 뒤이기 때문).
+async function processPost({ chatId, rawContent, photos, wantsAiImage }) {
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
@@ -72,7 +109,7 @@ export default async function handler(req, res) {
 
     if (!parsed) {
       await sendTelegram(chatId, '포스팅 생성 중 오류가 발생했습니다. 다시 시도해주세요');
-      return res.status(200).send('json parse failed');
+      return;
     }
 
     const { title, tags, body: polishedBody, description, imagePrompt, category } = parsed;
@@ -120,12 +157,45 @@ ${polishedBody}
     const link = `${siteUrl}/blog/${dateStr}-${slug}/`;
 
     await sendTelegram(chatId, `포스팅 완료 (1~2분 후 반영)\n제목: ${title}\n${link}`);
-
-    return res.status(200).send('posted');
   } catch (err) {
     console.error(err);
     await sendTelegram(chatId, `오류 발생: ${err.message}`);
-    return res.status(200).send('error handled');
+  }
+}
+
+// update_id를 짧은 TTL로 KV에 SET NX 해서, 이미 처리 중/처리된 업데이트면 true를 반환한다.
+// KV가 설정되지 않은 환경에서는 dedup을 건너뛰고 항상 false(중복 아님)를 반환한다 - 이 레이어가
+// 없어도 응답을 즉시 보내는 것 자체가 텔레그램 재전송의 근본 원인을 없애기 때문에 안전하게 열어둔다.
+async function isDuplicateUpdate(updateId) {
+  const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  if (!kvUrl || !kvToken) {
+    console.warn('KV_REST_API_URL/KV_REST_API_TOKEN이 설정되지 않아 update_id 중복 방지를 건너뜁니다.');
+    return false;
+  }
+
+  try {
+    const res = await fetch(kvUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${kvToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(['SET', `telegram_update:${updateId}`, '1', 'NX', 'EX', '120'])
+    });
+
+    if (!res.ok) {
+      console.error('KV dedup 요청 실패:', res.status, await res.text());
+      return false;
+    }
+
+    const data = await res.json();
+    // SET ... NX가 성공(새 키 생성)하면 result: "OK", 이미 존재해서 실패하면 result: null
+    return data.result !== 'OK';
+  } catch (e) {
+    console.error('KV dedup 오류:', e);
+    return false;
   }
 }
 
