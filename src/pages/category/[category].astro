@@ -2,6 +2,7 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
 import { CATEGORIES, categoryLabel, categoryColor } from '../../lib/categories.js';
+import { fmtTime, isNewPost } from '../../lib/date.js';
 
 export async function getStaticPaths() {
   return CATEGORIES.map((c) => ({ params: { category: c.id } }));
@@ -14,7 +15,8 @@ const posts = (await getCollection('blog'))
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
 
 function fmtDate(d) {
-  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '');
+  const dateStr = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '');
+  return `${dateStr} ${fmtTime(d)}`;
 }
 ---
 <BaseLayout title={categoryLabel(category)}>
@@ -89,6 +91,20 @@ function fmtDate(d) {
       color: var(--ink);
     }
     .card:hover h3 { color: var(--gold); }
+
+    .new-badge {
+      display: inline-block;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #fff;
+      background: var(--new-accent);
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      margin-left: 0.45rem;
+      vertical-align: middle;
+    }
     .meta {
       font-family: 'IBM Plex Mono', monospace;
       font-size: 0.72rem;
@@ -111,7 +127,7 @@ function fmtDate(d) {
             ? <img src={post.data.image} alt={post.data.title} />
             : <span class="noimg">NO IMAGE</span>}
         </div>
-        <h3>{post.data.title}</h3>
+        <h3>{post.data.title}{isNewPost(post.data.pubDate) && <span class="new-badge">NEW</span>}</h3>
         <div class="meta">{fmtDate(post.data.pubDate)}</div>
       </a>
     ))}

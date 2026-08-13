@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     const safeCategory = validCategories.includes(category) ? category : 'real-estate';
 
     const slug = makeSlug(title);
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const { dateStr, pubDateIso } = getKstDateAndIso();
     const filename = `${dateStr}-${slug}.md`;
 
     // 이미지 처리: 1) 사용자가 사진 첨부 2) AI이미지 요청 3) 없음
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
     const frontmatter = `---
 title: "${escapeYaml(title)}"
 description: "${escapeYaml(description)}"
-pubDate: ${dateStr}
+pubDate: ${pubDateIso}
 tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]
 category: "${safeCategory}"${imageFrontmatter}
 ---
@@ -332,4 +332,20 @@ function makeSlug(title) {
 
 function escapeYaml(str) {
   return String(str).replace(/"/g, '\\"');
+}
+
+// 현재 시각을 한국(KST, UTC+9) 기준 날짜/전체 타임스탬프로 반환
+function getKstDateAndIso() {
+  const pad = (n) => String(n).padStart(2, '0');
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const y = kst.getUTCFullYear();
+  const mo = pad(kst.getUTCMonth() + 1);
+  const d = pad(kst.getUTCDate());
+  const h = pad(kst.getUTCHours());
+  const mi = pad(kst.getUTCMinutes());
+  const s = pad(kst.getUTCSeconds());
+  return {
+    dateStr: `${y}-${mo}-${d}`,
+    pubDateIso: `${y}-${mo}-${d}T${h}:${mi}:${s}+09:00`
+  };
 }

@@ -2,6 +2,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
 import { CATEGORIES, categoryLabel, categoryColor } from '../lib/categories.js';
+import { fmtTime, isNewPost } from '../lib/date.js';
 
 const allPosts = (await getCollection('blog')).sort(
   (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf()
@@ -16,7 +17,8 @@ const sections = CATEGORIES.map((cat) => ({
 })).filter((s) => s.posts.length > 0);
 
 function fmtDate(d) {
-  return d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '');
+  const dateStr = d.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '.').replace(/\.$/, '');
+  return `${dateStr} ${fmtTime(d)}`;
 }
 ---
 <BaseLayout title="홈" tags={allTags}>
@@ -176,6 +178,20 @@ function fmtDate(d) {
       color: var(--ink);
     }
     .card:hover h3 { color: var(--gold); }
+
+    .new-badge {
+      display: inline-block;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: #fff;
+      background: var(--new-accent);
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      margin-left: 0.45rem;
+      vertical-align: middle;
+    }
   </style>
 
   {allPosts.length === 0 && (
@@ -191,7 +207,10 @@ function fmtDate(d) {
       </a>
       <div class="body">
         <span class="eyebrow-tag" style={`--cat-color: ${categoryColor(featured.data.category)}`}>{categoryLabel(featured.data.category)}</span>
-        <h2><a href={`/blog/${featured.slug}/`}>{featured.data.title}</a></h2>
+        <h2>
+          <a href={`/blog/${featured.slug}/`}>{featured.data.title}</a>
+          {isNewPost(featured.data.pubDate) && <span class="new-badge">NEW</span>}
+        </h2>
         <p class="desc">{featured.data.description}</p>
         <div class="meta">{fmtDate(featured.data.pubDate)}</div>
       </div>
@@ -212,7 +231,7 @@ function fmtDate(d) {
                 ? <img src={post.data.image} alt={post.data.title} />
                 : <span class="noimg">NO IMAGE</span>}
             </div>
-            <h3>{post.data.title}</h3>
+            <h3>{post.data.title}{isNewPost(post.data.pubDate) && <span class="new-badge">NEW</span>}</h3>
             <div class="meta">{fmtDate(post.data.pubDate)}</div>
           </a>
         ))}
