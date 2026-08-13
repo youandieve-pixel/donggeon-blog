@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     const safeCategory = validCategories.includes(category) ? category : 'real-estate';
 
     const slug = makeSlug(title);
-    const { dateStr, pubDateIso } = getKstDateAndIso();
+    const { dateStr, pubDateValue } = getKstDateAndPubDate();
     const filename = `${dateStr}-${slug}.md`;
 
     // 이미지 처리: 1) 사용자가 사진 첨부 2) AI이미지 요청 3) 없음
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
     const frontmatter = `---
 title: "${escapeYaml(title)}"
 description: "${escapeYaml(description)}"
-pubDate: ${pubDateIso}
+pubDate: ${pubDateValue}
 tags: [${tags.map((t) => `"${escapeYaml(t)}"`).join(', ')}]
 category: "${safeCategory}"${imageFrontmatter}
 ---
@@ -335,17 +335,18 @@ function escapeYaml(str) {
 }
 
 // 현재 시각을 한국(KST, UTC+9) 기준 날짜/전체 타임스탬프로 반환
-function getKstDateAndIso() {
-  const pad = (n) => String(n).padStart(2, '0');
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const y = kst.getUTCFullYear();
-  const mo = pad(kst.getUTCMonth() + 1);
-  const d = pad(kst.getUTCDate());
-  const h = pad(kst.getUTCHours());
-  const mi = pad(kst.getUTCMinutes());
-  const s = pad(kst.getUTCSeconds());
+// Intl.DateTimeFormat + timeZone: 'Asia/Seoul'로 실제 KST 시각을 뽑아내 수동 오프셋 계산을 피한다.
+function getKstDateAndPubDate() {
+  const now = new Date();
+  const kstDateStr = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).format(now).replace(' ', 'T');
+  const pubDateValue = `${kstDateStr}+09:00`;
   return {
-    dateStr: `${y}-${mo}-${d}`,
-    pubDateIso: `${y}-${mo}-${d}T${h}:${mi}:${s}+09:00`
+    dateStr: kstDateStr.slice(0, 10),
+    pubDateValue
   };
 }
