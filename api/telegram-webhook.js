@@ -33,12 +33,14 @@
 
 import { waitUntil } from '@vercel/functions';
 
-// maxDuration: 120 - Vercel Hobby 플랜은 함수 실행 시간 상한이 60초라 이 값을 그대로 두면
-// 배포/실행이 거부되거나 60초에서 강제 종료될 수 있다. Pro 플랜(기본 300초, Fluid Compute
-// 활성화 시 더 늘릴 수 있음) 이상에서만 120초가 유효하니, 실제 Vercel 프로젝트 플랜을
-// 반드시 확인할 것 (Hobby라면 60까지만 가능 - 이 경우 web_search 호출 횟수(max_uses)를
-// 줄이거나 플랜을 올리는 방향을 검토해야 한다).
-export const config = { runtime: 'nodejs', maxDuration: 120 };
+// 이 프로젝트는 Vercel Hobby 플랜이라 함수 실행 시간 상한이 60초로 고정되어 있다(그 이상
+// 설정해도 무시됨). 그래서 maxDuration은 플랜이 허용하는 최대치인 60으로 맞추고, 대신
+// web_search 호출 횟수(max_uses)를 1로 제한해 파이프라인 전체가 60초 안에 끝날 확률을 높였다.
+// 다만 검색 결과가 아무리 짧아도 본문 생성 자체(특히 긴 주제)에 시간이 걸릴 수 있어 60초를
+// 완전히 보장하지는 못한다 - 그래서 45초 지연 시 텔레그램으로 먼저 안내를 보내는 소프트
+// 타임아웃(SOFT_TIMEOUT_MS, 아래 processPost 참고)을 함께 두어, 60초 근처까지 걸리더라도
+// 사용자가 무응답으로 오해하지 않게 했다.
+export const config = { runtime: 'nodejs', maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -111,7 +113,7 @@ async function processPost({ chatId, rawContent }) {
   const startedAt = Date.now();
   const elapsed = () => `${Date.now() - startedAt}ms`;
 
-  const SOFT_TIMEOUT_MS = 100_000; // maxDuration(120s)보다 여유를 두고 지연 안내를 먼저 보냄
+  const SOFT_TIMEOUT_MS = 45_000; // maxDuration(60s)보다 여유를 두고 지연 안내를 먼저 보냄
   const softTimeoutHandle = setTimeout(() => {
     console.warn(`[processPost] ${elapsed()} 경과 - 지연 안내 전송`);
     sendTelegram(
@@ -258,7 +260,7 @@ async function polishWithClaude(rawContent) {
         {
           type: 'web_search_20250305',
           name: 'web_search',
-          max_uses: 5
+          max_uses: 1
         }
       ]
     })
