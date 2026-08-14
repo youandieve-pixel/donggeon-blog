@@ -1,11 +1,12 @@
 // Vercel Serverless Function
-// 텔레그램 /post 명령어 수신 -> Claude API로 글 생성 -> GitHub에 마크다운 커밋 -> 자동 배포
+// 텔레그램 /post 명령어 수신 -> Claude API로 글 생성(+웹서치) -> GitHub에 마크다운 커밋 -> 자동 배포
 //
-// [임시 최소 버전] 어제부터 포스팅이 계속 실패해서, 원인을 좁히기 위해 일부러 단순화했다.
-// 아래 두 기능은 "완전히 작동 확인될 때까지" 잠시 제거한 상태다:
-//   - web_search 도구 (tools 파라미터 자체를 뺌 - Claude가 순수 텍스트 생성만 함)
-//   - 이미지 생성/첨부 (AI이미지 키워드, 사진 첨부, Pollinations 연동 전부 제거)
-// 이 최소 파이프라인이 안정적으로 동작하는 게 확인되면, 웹서치와 이미지 기능을 하나씩 다시 붙인다.
+// [단계적 복구 중] 무응답/파싱 실패 문제를 진단하려고 최소 버전으로 내렸다가, 안정 동작이
+// 확인되어 web_search를 다시 붙였다. 이미지 생성/첨부(AI이미지 키워드, 사진 첨부, Pollinations
+// 연동)는 아직 제거된 상태 - 웹서치까지 안정 동작이 확인되면 다음으로 복구할 예정.
+// web_search는 assistant message prefill과 함께 쓸 수 없다("This model does not support
+// assistant message prefill" 오류 원인이었음) - 그래서 messages는 user 메시지 하나만 유지하고,
+// JSON 파싱은 prefill 없이 text 블록에서 정규식(첫 '{' ~ 마지막 '}')으로 추출하는 방식을 쓴다.
 //
 // 필요한 환경변수 (Vercel 프로젝트 Settings > Environment Variables 에 등록):
 //   TELEGRAM_BOT_TOKEN      : BotFather에서 발급받은 토큰
@@ -32,7 +33,12 @@
 
 import { waitUntil } from '@vercel/functions';
 
-export const config = { runtime: 'nodejs', maxDuration: 60 };
+// maxDuration: 120 - Vercel Hobby 플랜은 함수 실행 시간 상한이 60초라 이 값을 그대로 두면
+// 배포/실행이 거부되거나 60초에서 강제 종료될 수 있다. Pro 플랜(기본 300초, Fluid Compute
+// 활성화 시 더 늘릴 수 있음) 이상에서만 120초가 유효하니, 실제 Vercel 프로젝트 플랜을
+// 반드시 확인할 것 (Hobby라면 60까지만 가능 - 이 경우 web_search 호출 횟수(max_uses)를
+// 줄이거나 플랜을 올리는 방향을 검토해야 한다).
+export const config = { runtime: 'nodejs', maxDuration: 120 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -105,7 +111,7 @@ async function processPost({ chatId, rawContent }) {
   const startedAt = Date.now();
   const elapsed = () => `${Date.now() - startedAt}ms`;
 
-  const SOFT_TIMEOUT_MS = 50_000; // maxDuration(60s)보다 여유를 두고 지연 안내를 먼저 보냄
+  const SOFT_TIMEOUT_MS = 100_000; // maxDuration(120s)보다 여유를 두고 지연 안내를 먼저 보냄
   const softTimeoutHandle = setTimeout(() => {
     console.warn(`[processPost] ${elapsed()} 경과 - 지연 안내 전송`);
     sendTelegram(
@@ -208,12 +214,13 @@ async function polishWithClaude(rawContent) {
 
 【최우선 규칙 — 반드시 지킬 것】
 응답은 반드시 순수 JSON 객체 하나여야 하고, 첫 글자는 반드시 '{', 마지막 글자는 반드시 '}' 여야 하며,
-그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. 인사말도 금지다.
+그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. 인사말도 금지다. web_search로
+조사하는 중간 과정에는 자유롭게 생각해도 되지만, 최종 응답 메시지 하나는 오직 JSON 객체만 담아야 한다.
 
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
-- 웹서치를 쓸 수 없으니, 확인할 수 없는 최신 수치나 사실을 지어내지 마라. 사용자가 준 내용과 네가 이미 알고 있는 일반적인 배경 지식 범위 안에서만 작성해.
+- 사용자가 최신 정보(시황, 뉴스, 통계, 순위, 가격 등)를 요청했다면: web_search 도구로 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해. 확인할 수 없는 수치나 사실을 지어내지 마라.
 - 표면적인 요약에 그치지 말고 깊이 있게 써:
-  - 사용자가 준 내용 안에 있는 구체적인 사실(수치, 기간, 날짜 등)은 그대로 살려서 서술해.
+  - 사용자가 준 내용이나 검색으로 확인한 구체적인 사실(수치, 기간, 날짜 등)은 그대로 살려서 서술해.
   - 단순 사실 나열로 끝내지 말고, 왜 이 일이 중요한지·어떤 배경과 맥락에서 발생했는지까지 짚어줘.
   - 글 구조는 자연스러운 소제목을 활용해 "배경/맥락 → 핵심 변화 내용 → 실질적 영향(예: 독자에게 실제로 뭐가 달라지는지) → 전망 또는 시사점" 이 4단계 흐름으로 구성해.
   - 본문(body)은 최소 800자 이상으로 작성해. 너무 짧게 끝내지 마.
@@ -246,7 +253,14 @@ async function polishWithClaude(rawContent) {
       model: 'claude-sonnet-4-6',
       max_tokens: 4000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: rawContent }]
+      messages: [{ role: 'user', content: rawContent }],
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: 5
+        }
+      ]
     })
   });
 
