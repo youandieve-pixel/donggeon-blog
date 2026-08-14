@@ -22,7 +22,17 @@
 //   KV_REST_API_URL / KV_REST_API_TOKEN             : Vercel KV (Upstash Redis) REST 접속 정보
 //   (또는) UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
 //
-// 사용법: /post 텍스트  -> 이미지 없이 포스팅
+// 사용법:
+//   /post 텍스트  -> 그 텍스트로 바로 포스팅
+//   /post (뒤에 아무 내용 없이)  -> "추천 모드": Claude가 오늘 쓸만한 주제 5개를 4개 카테고리
+//     골고루 섞어서 추천 -> 번호(1~5)만 담은 메시지로 답장하면 그 주제로 바로 발행
+//
+// 추천 모드 상태 저장: 추천 목록 5개를 다음 메시지가 올 때까지 기억해야 하는데, 서버리스
+// 인스턴스는 매번 새로 뜰 수 있어 메모리 변수로는 안 된다. Vercel KV(Upstash Redis)가
+// 설정되어 있으면 그쪽에 SET EX 3600(네이티브 TTL, 커밋 없음)으로 저장하고, 없으면 GitHub
+// 저장소에 임시 파일(.pending-suggestions.json)로 저장한다 - 다만 GitHub 파일 방식은 저장/
+// 조회 후 삭제할 때마다 커밋이 생겨 그때마다 Vercel 재배포가 한 번씩 더 돈다는 트레이드오프가
+// 있다. KV 환경변수를 등록해두면 이 오버헤드 없이 동작한다.
 //
 // 응답 지연 방지: 텔레그램은 웹훅이 몇 초 안에 200을 응답하지 않으면 같은 업데이트를 재전송한다.
 // 그래서 인증/파싱/dedup 체크까지만 동기로 끝내고 즉시 200을 응답한 뒤, 무거운 처리(Claude 호출,
@@ -73,25 +83,43 @@ export default async function handler(req, res) {
     return res.status(200).send('unauthorized user');
   }
 
+  // update_id 기반 중복 요청 방지. 서버리스 인스턴스는 매번 새로 뜰 수 있어 메모리 변수로는
+  // 신뢰할 수 없으므로, 외부 저장소(Vercel KV/Upstash Redis)에 SET NX EX로 짧게 마킹해둔다.
+  // 무거운 처리를 waitUntil로 넘기는 아래 세 갈래(추천 응답/추천 요청/일반 포스팅) 모두에서
+  // 같은 방식으로 검사한다.
+  async function isDuplicate() {
+    if (updateId === undefined) return false;
+    const duplicate = await isDuplicateUpdate(updateId);
+    if (duplicate) console.warn(`중복 update_id 감지, 무시함: ${updateId}`);
+    return duplicate;
+  }
+
+  // "번호로 답장" - 숫자(1~5) 하나만 담긴 메시지면 추천 목록에서 해당 주제를 골라 발행한다.
+  if (/^[1-5]$/.test(rawText)) {
+    if (await isDuplicate()) {
+      return res.status(200).send('duplicate ignored');
+    }
+    waitUntil(handleSuggestionReply({ chatId, choice: Number(rawText) }));
+    return res.status(200).send('accepted-choice');
+  }
+
   if (!rawText.startsWith('/post')) {
     return res.status(200).send('ignored');
   }
 
   const rawContent = rawText.replace(/^\/post\s*/, '').trim();
 
+  // "/post"만 보내고 내용이 없으면 추천 모드: 오늘 쓸만한 주제 5개를 추천한다.
   if (!rawContent) {
-    await sendTelegram(chatId, '/post 뒤에 내용을 입력해줘. 예: /post 오늘 있었던 일...');
-    return res.status(200).send('empty content');
-  }
-
-  // update_id 기반 중복 요청 방지. 서버리스 인스턴스는 매번 새로 뜰 수 있어 메모리 변수로는
-  // 신뢰할 수 없으므로, 외부 저장소(Vercel KV/Upstash Redis)에 SET NX EX로 짧게 마킹해둔다.
-  if (updateId !== undefined) {
-    const duplicate = await isDuplicateUpdate(updateId);
-    if (duplicate) {
-      console.warn(`중복 update_id 감지, 무시함: ${updateId}`);
+    if (await isDuplicate()) {
       return res.status(200).send('duplicate ignored');
     }
+    waitUntil(generateSuggestions({ chatId }));
+    return res.status(200).send('accepted-suggestions');
+  }
+
+  if (await isDuplicate()) {
+    return res.status(200).send('duplicate ignored');
   }
 
   // 여기서부터가 무거운 처리. await 하지 않고 waitUntil에 넘겨서, 응답을 먼저 보낸 뒤에도
@@ -170,6 +198,319 @@ ${polishedBody}
     );
   } finally {
     clearTimeout(softTimeoutHandle);
+  }
+}
+
+const CATEGORY_LABELS_KO = {
+  'real-estate': '부동산',
+  stocks: '증시',
+  economy: '경제·정책',
+  tips: '재테크 팁'
+};
+
+function categoryLabelKo(category) {
+  return CATEGORY_LABELS_KO[category] || category;
+}
+
+// "/post"만 보냈을 때: 오늘 쓸만한 주제 5개를 추천받아 텔레그램으로 보여주고, 사용자가 번호로
+// 답장할 때까지 그 목록을 기억해둔다(savePendingSuggestions). 아래 try/catch와 소프트 타임아웃은
+// processPost와 같은 이유로 존재한다 - 자세한 설명은 processPost 주석 참고.
+async function generateSuggestions({ chatId }) {
+  const startedAt = Date.now();
+  const elapsed = () => `${Date.now() - startedAt}ms`;
+
+  const SOFT_TIMEOUT_MS = 55_000;
+  const softTimeoutHandle = setTimeout(() => {
+    console.warn(`[generateSuggestions] ${elapsed()} 경과 - 지연 안내 전송`);
+    sendTelegram(
+      chatId,
+      '추천 주제를 준비하는 데 예상보다 오래 걸리고 있습니다. 잠시만 기다려주세요.'
+    ).catch((e) => console.error('[generateSuggestions] 지연 안내 전송 실패:', e));
+  }, SOFT_TIMEOUT_MS);
+
+  try {
+    await sendTelegram(chatId, '오늘의 추천 주제를 준비하고 있어요...');
+
+    console.log(`[generateSuggestions] ${elapsed()} Claude 호출 시작`);
+    const suggestions = await suggestTopicsWithClaude();
+    console.log(`[generateSuggestions] ${elapsed()} Claude 호출 완료, ${suggestions ? suggestions.length : 0}개 주제 수신`);
+
+    if (!suggestions || suggestions.length === 0) {
+      await sendTelegram(chatId, '추천 주제를 만드는 중 오류가 발생했습니다. 잠시 후 /post로 다시 시도해주세요');
+      return;
+    }
+
+    await savePendingSuggestions(chatId, suggestions);
+    console.log(`[generateSuggestions] ${elapsed()} 추천 목록 저장 완료`);
+
+    const listText = suggestions
+      .map((s, i) => `${i + 1}. [${categoryLabelKo(s.category)}] ${s.title}`)
+      .join('\n');
+
+    await sendTelegram(chatId, `오늘 뭘 써볼까요?\n\n${listText}\n\n번호로 답장해주세요.`);
+    console.log(`[generateSuggestions] ${elapsed()} 전체 완료`);
+  } catch (err) {
+    console.error(`[generateSuggestions] ${elapsed()} 오류 발생:`, err);
+    await sendTelegram(chatId, `추천 주제 생성 중 오류가 발생했습니다: ${err.message}`).catch((e) =>
+      console.error('[generateSuggestions] 오류 메시지 전송조차 실패:', e)
+    );
+  } finally {
+    clearTimeout(softTimeoutHandle);
+  }
+}
+
+// 번호로 답장이 왔을 때: 저장해둔 추천 목록에서 해당 번호를 찾아, 그 title을 rawContent 삼아
+// 기존 발행 파이프라인(processPost)을 그대로 실행한다. 목록이 없거나(다른 인스턴스/이미 소비됨)
+// 만료됐으면 다시 /post로 요청하라고 안내한다.
+async function handleSuggestionReply({ chatId, choice }) {
+  try {
+    const suggestions = await loadPendingSuggestions(chatId);
+
+    if (!suggestions || !suggestions[choice - 1]) {
+      await sendTelegram(chatId, '추천 목록이 만료됐어요. /post로 다시 요청해주세요.');
+      return;
+    }
+
+    const selected = suggestions[choice - 1];
+    await clearPendingSuggestions(chatId);
+
+    await processPost({ chatId, rawContent: selected.title });
+  } catch (err) {
+    console.error('[handleSuggestionReply] 오류 발생:', err);
+    await sendTelegram(chatId, `추천 주제 처리 중 오류가 발생했습니다: ${err.message}`).catch((e) =>
+      console.error('[handleSuggestionReply] 오류 메시지 전송조차 실패:', e)
+    );
+  }
+}
+
+// Claude API로 오늘 쓸만한 블로그 주제 5개를 추천받는다(4개 카테고리 골고루, web_search 1회 활용).
+async function suggestTopicsWithClaude() {
+  const { dateStr: todayKst } = getKstDateAndPubDate();
+  const [todayYear, todayMonthRaw, todayDayRaw] = todayKst.split('-');
+  const todayMonth = String(Number(todayMonthRaw));
+  const todayKorean = `${todayYear}년 ${todayMonth}월 ${Number(todayDayRaw)}일`;
+
+  const systemPrompt = `너는 "탑건 부동산"이라는 개인 블로그의 편집자야. 오늘(${todayKorean}) 쓸 만한
+블로그 주제 5개를 추천해야 해.
+
+【최우선 규칙 — 반드시 지킬 것】
+응답은 반드시 순수 JSON 배열 하나여야 하고, 첫 글자는 반드시 '[', 마지막 글자는 반드시 ']'여야
+하며, 그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. 인사말도 금지다.
+
+- web_search 도구로 오늘(${todayKorean}) 기준 실제 이슈(오늘/최근 발표된 지표, 뉴스, 정책 등)를
+  조사한 뒤 그 결과를 반영해서 추천해라. 검색어에는 "${todayYear}년 ${todayMonth}월", "오늘",
+  "최근"처럼 시의성 있는 키워드를 반드시 포함해라. 검색은 전체 주제를 아우르는 검색어로 딱 1번만
+  해라 - 주제마다 따로 검색하지 마라.
+- 정확히 5개를 추천하고, "real-estate"(부동산), "stocks"(증시), "economy"(경제·정책),
+  "tips"(재테크 팁) 4개 카테고리가 골고루 섞이게 해라(한 카테고리에 치우치지 마라).
+- 각 주제의 title은 짧고 구체적인 한 줄 제목으로 써라(가능하면 실제 이슈나 수치를 담아라).
+
+최종 응답은 항상 아래 JSON 배열 형식만 출력해라. 설명이나 코드블록 표시(\`\`\`)는 포함하지 마라:
+[
+  { "category": "real-estate|stocks|economy|tips 중 하나", "title": "한 줄 주제" }
+]
+(배열 요소는 정확히 5개)`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1500,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: '오늘 쓸만한 블로그 주제 5개 추천해줘' }],
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: 1
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Claude API 오류: ${response.status} ${errText}`);
+  }
+
+  const data = await response.json();
+  const textBlocks = data.content.filter((c) => c.type === 'text');
+  const lastText = textBlocks[textBlocks.length - 1];
+
+  if (!lastText) {
+    throw new Error('Claude 응답에서 텍스트를 찾을 수 없음');
+  }
+
+  const cleaned = sanitizeJsonControlChars(lastText.text.replace(/```json|```/g, '').trim());
+
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (match) {
+      try {
+        parsed = JSON.parse(match[0]);
+      } catch (e2) {
+        parsed = null;
+      }
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    console.error('추천 주제 JSON 파싱 실패. 원본 응답 텍스트:', lastText.text);
+    return null;
+  }
+
+  const validCategories = ['real-estate', 'stocks', 'economy', 'tips'];
+  const cleanedSuggestions = parsed
+    .filter((s) => s && typeof s.title === 'string' && validCategories.includes(s.category))
+    .slice(0, 5);
+
+  return cleanedSuggestions.length > 0 ? cleanedSuggestions : null;
+}
+
+const SUGGESTIONS_TTL_MS = 60 * 60 * 1000; // 1시간
+const SUGGESTIONS_GITHUB_PATH = '.pending-suggestions.json';
+
+function hasKvConfigured() {
+  const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  return Boolean(kvUrl && kvToken);
+}
+
+// Upstash REST API에 Redis 명령 하나를 그대로 실행한다 (예: ['SET', key, value, 'EX', '3600']).
+async function kvCommand(command) {
+  const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  const res = await fetch(kvUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${kvToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(command)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`KV 요청 실패: ${res.status} ${errText}`);
+  }
+
+  return res.json();
+}
+
+// 추천 목록을 저장한다. KV가 설정되어 있으면 SET EX 3600(네이티브 TTL, 커밋 없음)으로,
+// 없으면 GitHub 저장소에 임시 파일로 저장한다(이 경우 커밋이 발생해 재배포가 한 번 더 돈다).
+async function savePendingSuggestions(chatId, suggestions) {
+  const payload = JSON.stringify({ generatedAt: Date.now(), suggestions });
+
+  if (hasKvConfigured()) {
+    await kvCommand(['SET', `pending_suggestions:${chatId}`, payload, 'EX', String(SUGGESTIONS_TTL_MS / 1000)]);
+    return;
+  }
+
+  const existing = await getGithubFile(SUGGESTIONS_GITHUB_PATH);
+  const contentBase64 = Buffer.from(payload, 'utf-8').toString('base64');
+  await putToGithub(SUGGESTIONS_GITHUB_PATH, contentBase64, 'chore: 추천 주제 임시 저장', existing?.sha);
+}
+
+// 저장된 추천 목록을 읽는다. 없거나(한 번도 생성된 적 없음/이미 소비됨) 만료됐으면 null을 반환한다.
+// KV 경로는 TTL이 지나면 GET 자체가 null을 반환하므로 별도 만료 체크가 필요 없고, GitHub 파일
+// 경로는 TTL 개념이 없어서 저장된 생성 시각(generatedAt)을 직접 비교해서 만료를 판단한다.
+async function loadPendingSuggestions(chatId) {
+  let raw;
+
+  if (hasKvConfigured()) {
+    const data = await kvCommand(['GET', `pending_suggestions:${chatId}`]);
+    if (!data.result) return null;
+    raw = data.result;
+  } else {
+    const file = await getGithubFile(SUGGESTIONS_GITHUB_PATH);
+    if (!file) return null;
+    raw = file.content;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    console.error('[loadPendingSuggestions] 추천 목록 파싱 실패:', e);
+    return null;
+  }
+
+  if (!hasKvConfigured() && Date.now() - parsed.generatedAt > SUGGESTIONS_TTL_MS) {
+    return null;
+  }
+
+  return parsed.suggestions;
+}
+
+// 추천 목록을 정리한다(소비 후 또는 재생성 전). KV는 DEL 한 번, GitHub 파일 경로는 파일 삭제
+// 커밋 한 번이 발생한다.
+async function clearPendingSuggestions(chatId) {
+  if (hasKvConfigured()) {
+    await kvCommand(['DEL', `pending_suggestions:${chatId}`]);
+    return;
+  }
+
+  const existing = await getGithubFile(SUGGESTIONS_GITHUB_PATH);
+  if (existing) {
+    await deleteGithubFile(SUGGESTIONS_GITHUB_PATH, existing.sha, 'chore: 추천 주제 임시 파일 정리');
+  }
+}
+
+// GitHub Contents API로 파일 하나를 조회한다. 없으면(404) null을 반환한다.
+async function getGithubFile(path) {
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || 'main';
+  const url = `https://api.github.com/repos/${repo}/contents/${path}?ref=${branch}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json'
+    }
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`GitHub 파일 조회 실패: ${response.status} ${errText}`);
+  }
+
+  const data = await response.json();
+  return { content: Buffer.from(data.content, 'base64').toString('utf-8'), sha: data.sha };
+}
+
+// GitHub Contents API로 파일을 삭제한다(sha가 필요).
+async function deleteGithubFile(path, sha, commitMessage) {
+  const repo = process.env.GITHUB_REPO;
+  const branch = process.env.GITHUB_BRANCH || 'main';
+  const url = `https://api.github.com/repos/${repo}/contents/${path}`;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ message: commitMessage, sha, branch })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`GitHub 파일 삭제 실패: ${response.status} ${errText}`);
   }
 }
 
@@ -383,7 +724,8 @@ async function commitTextToGithub(path, content, commitMessage) {
   await putToGithub(path, contentBase64, commitMessage);
 }
 
-async function putToGithub(path, contentBase64, commitMessage) {
+// sha를 넘기면 기존 파일 업데이트(예: 추천 목록 임시 파일 갱신), 생략하면 새 파일 생성.
+async function putToGithub(path, contentBase64, commitMessage, sha) {
   const repo = process.env.GITHUB_REPO;
   const branch = process.env.GITHUB_BRANCH || 'main';
   const url = `https://api.github.com/repos/${repo}/contents/${path}`;
@@ -398,7 +740,8 @@ async function putToGithub(path, contentBase64, commitMessage) {
     body: JSON.stringify({
       message: commitMessage,
       content: contentBase64,
-      branch
+      branch,
+      ...(sha ? { sha } : {})
     })
   });
 
