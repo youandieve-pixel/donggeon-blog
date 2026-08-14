@@ -211,6 +211,11 @@ async function isDuplicateUpdate(updateId) {
 
 // Claude API로 제목/태그/요약 생성 + 본문 다듬기 (웹서치 없음 - 순수 텍스트 생성만)
 async function polishWithClaude(rawContent) {
+  const { dateStr: todayKst } = getKstDateAndPubDate();
+  const [todayYear, todayMonthRaw, todayDayRaw] = todayKst.split('-');
+  const todayMonth = String(Number(todayMonthRaw));
+  const todayKorean = `${todayYear}년 ${todayMonth}월 ${Number(todayDayRaw)}일`;
+
   const systemPrompt = `너는 개인 블로그 편집자야. 사용자가 텔레그램으로 보낸 메모나 요청을 받아서
 자연스러운 한국어 블로그 글로 작성해.
 
@@ -222,8 +227,12 @@ async function polishWithClaude(rawContent) {
 ("검색 횟수 제한으로..." 같은 문장 금지) - 그때까지 확보한 정보와 배경 지식만으로 조용히 최종
 JSON을 작성해라.
 
+오늘은 ${todayKorean}이다. 검색 결과에서 실제로 확인한 날짜/연도만 그대로 사용하고, 확인되지 않은
+연도(예: 검색 없이 아는 "작년 전망", "2025년 시장" 같은 표현)를 마치 최신인 것처럼 임의로 쓰지 마라.
+글의 시점은 항상 오늘(${todayKorean}) 기준이어야 한다.
+
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
-- 사용자가 최신 정보(시황, 뉴스, 통계, 순위, 가격 등)를 요청했다면: web_search 도구로 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해. 확인할 수 없는 수치나 사실을 지어내지 마라.
+- 사용자가 최신 정보(시황, 뉴스, 통계, 순위, 가격 등)를 요청했다면: web_search 도구로 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해. 확인할 수 없는 수치나 사실을 지어내지 마라. 검색어에는 반드시 "${todayYear}년 ${todayMonth}월", "이번 달", "최근"처럼 시의성 있는 키워드를 포함시켜서 오래된 결과가 아니라 최신 결과가 나오도록 해라.
 - 요청에 여러 주제가 "A+B", "A와 B"처럼 함께 묶여 있어도, 검색은 각 주제마다 따로 하지 말고 전체를
   아우르는 검색어 하나로 딱 한 번만 검색해라. 나머지는 그 결과와 배경 지식을 조합해서 써라.
 - 표면적인 요약에 그치지 말고 깊이 있게 써:
@@ -277,6 +286,24 @@ JSON을 작성해라.
   }
 
   const data = await response.json();
+
+  // 실제로 웹서치가 호출됐는지, 검색 결과에 오늘 연도가 언급되는지를 로그로 남긴다 -
+  // 검색 없이 텍스트만 생성했거나(모델이 도구를 아예 안 쓴 경우), 검색은 했지만 결과가
+  // 오래된 정보뿐이었던 경우를 Vercel 로그에서 구분할 수 있게 하기 위함(자동 재시도는 하지
+  // 않음 - 60초 제한 안에서 재시도할 여유가 거의 없어서, 우선은 진단 가시성만 확보).
+  const searchToolUseCount = data.content.filter((c) => c.type === 'server_tool_use' && c.name === 'web_search').length;
+  const searchResultBlocks = data.content.filter((c) => c.type === 'web_search_tool_result');
+  if (searchToolUseCount === 0) {
+    console.warn('[polishWithClaude] web_search가 호출되지 않음 - 모델이 검색 없이 자체 지식만으로 응답했을 수 있음');
+  } else {
+    const resultsText = JSON.stringify(searchResultBlocks);
+    const mentionsCurrentYear = resultsText.includes(todayYear);
+    console.log(`[polishWithClaude] web_search 호출 ${searchToolUseCount}회, 검색 결과에 ${todayYear}년 언급: ${mentionsCurrentYear}`);
+    if (!mentionsCurrentYear) {
+      console.warn(`[polishWithClaude] 검색 결과에 ${todayYear}년이 보이지 않음 - 오래된 정보로 작성됐을 가능성 있음`);
+    }
+  }
+
   const textBlocks = data.content.filter((c) => c.type === 'text');
   const lastText = textBlocks[textBlocks.length - 1];
 
