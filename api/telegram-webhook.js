@@ -113,7 +113,7 @@ async function processPost({ chatId, rawContent }) {
   const startedAt = Date.now();
   const elapsed = () => `${Date.now() - startedAt}ms`;
 
-  const SOFT_TIMEOUT_MS = 45_000; // maxDuration(60s)보다 여유를 두고 지연 안내를 먼저 보냄
+  const SOFT_TIMEOUT_MS = 55_000; // maxDuration(60s)보다 여유를 두고 지연 안내를 먼저 보냄
   const softTimeoutHandle = setTimeout(() => {
     console.warn(`[processPost] ${elapsed()} 경과 - 지연 안내 전송`);
     sendTelegram(
@@ -125,7 +125,7 @@ async function processPost({ chatId, rawContent }) {
   try {
     await sendTelegram(chatId, '포스팅 준비 중...');
 
-    console.log(`[processPost] ${elapsed()} Claude 호출 시작 (웹서치 없음)`);
+    console.log(`[processPost] ${elapsed()} Claude 호출 시작 (web_search max_uses=1)`);
     const parsed = await polishWithClaude(rawContent);
     console.log(`[processPost] ${elapsed()} Claude 호출 완료, 파싱 ${parsed ? '성공' : '실패'}`);
 
@@ -218,9 +218,14 @@ async function polishWithClaude(rawContent) {
 응답은 반드시 순수 JSON 객체 하나여야 하고, 첫 글자는 반드시 '{', 마지막 글자는 반드시 '}' 여야 하며,
 그 앞뒤로 어떤 설명이나 마크다운 코드블록(\`\`\`)도 절대 포함하지 마라. 인사말도 금지다. web_search로
 조사하는 중간 과정에는 자유롭게 생각해도 되지만, 최종 응답 메시지 하나는 오직 JSON 객체만 담아야 한다.
+검색 횟수 제한에 걸리거나 원하는 만큼 검색하지 못했더라도, 그 사실을 응답에 절대 언급하지 마라
+("검색 횟수 제한으로..." 같은 문장 금지) - 그때까지 확보한 정보와 배경 지식만으로 조용히 최종
+JSON을 작성해라.
 
 - 사용자가 이미 겪은 일/생각을 적었다면: 과장하거나 내용을 새로 지어내지 말고, 원래 내용의 사실과 어조를 유지한 채 문장만 정리해.
 - 사용자가 최신 정보(시황, 뉴스, 통계, 순위, 가격 등)를 요청했다면: web_search 도구로 실제로 검색한 뒤, 검색으로 확인한 내용만 바탕으로 글을 작성해. 확인할 수 없는 수치나 사실을 지어내지 마라.
+- 요청에 여러 주제가 "A+B", "A와 B"처럼 함께 묶여 있어도, 검색은 각 주제마다 따로 하지 말고 전체를
+  아우르는 검색어 하나로 딱 한 번만 검색해라. 나머지는 그 결과와 배경 지식을 조합해서 써라.
 - 표면적인 요약에 그치지 말고 깊이 있게 써:
   - 사용자가 준 내용이나 검색으로 확인한 구체적인 사실(수치, 기간, 날짜 등)은 그대로 살려서 서술해.
   - 단순 사실 나열로 끝내지 말고, 왜 이 일이 중요한지·어떤 배경과 맥락에서 발생했는지까지 짚어줘.
@@ -253,7 +258,7 @@ async function polishWithClaude(rawContent) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 2500,
+      max_tokens: 3200,
       system: systemPrompt,
       messages: [{ role: 'user', content: rawContent }],
       tools: [
